@@ -11,6 +11,64 @@ import { Widget } from '@lumino/widgets';
 import { requestAPI } from './handler';
 
 /**
+ * Mock cell IDs data
+ */
+const MOCK_CELL_IDS = [
+  '0955501c-5637-4204-9ba5-a157055f6da8',
+  '88e7db2a-8c6f-4b6f-b1a9-6d73904cf32a',
+  'a1d2229d-76af-487d-95f2-93ba04a4544c',
+  'eedf1709-269e-4230-accf-9baa9c0476c4',
+  '2e91cbd4-c7eb-4a52-b229-44a6571a543f',
+  '14892b5b-efc8-4f29-a674-3f001b2cd9f4'
+];
+
+/**
+ * Create dropdown menu with cell IDs
+ */
+function createCellIdDropdown(buttonElement: HTMLElement): HTMLElement {
+  const dropdown = document.createElement('div');
+  dropdown.className = 'nb-sync-dropdown';
+
+  const dropdownContent = document.createElement('div');
+  dropdownContent.className = 'nb-sync-dropdown-content';
+
+  MOCK_CELL_IDS.forEach(cellId => {
+    const option = document.createElement('div');
+    option.className = 'nb-sync-dropdown-option';
+    option.textContent = cellId;
+    option.addEventListener('click', (e) => {
+      e.stopPropagation();
+      console.log('Selected cell ID:', cellId);
+      dropdown.remove();
+    });
+    dropdownContent.appendChild(option);
+  });
+
+  dropdown.appendChild(dropdownContent);
+
+  // Position dropdown relative to button
+  const buttonRect = buttonElement.getBoundingClientRect();
+  dropdown.style.position = 'fixed';
+  dropdown.style.top = `${buttonRect.bottom + 5}px`;
+  dropdown.style.left = `${buttonRect.left}px`;
+  dropdown.style.zIndex = '10000';
+
+  // Close dropdown when clicking outside
+  const closeDropdown = (e: Event) => {
+    if (!dropdown.contains(e.target as Node)) {
+      dropdown.remove();
+      document.removeEventListener('click', closeDropdown);
+    }
+  };
+
+  setTimeout(() => {
+    document.addEventListener('click', closeDropdown);
+  }, 0);
+
+  return dropdown;
+}
+
+/**
  * Create a sync button widget
  */
 function createSyncButton(): Widget {
@@ -19,9 +77,23 @@ function createSyncButton(): Widget {
   button.node.textContent = 'Sync';
   button.node.title = 'Sync this cell';
 
-  // Add click handler (currently no functionality)
-  button.node.addEventListener('click', () => {
-    console.log('Sync button clicked (no functionality yet)');
+  // Add click handler to show dropdown with cell IDs
+  button.node.addEventListener('click', (e) => {
+    e.stopPropagation();
+
+    // Remove any existing dropdown
+    const existingDropdown = document.querySelector('.nb-sync-dropdown');
+    if (existingDropdown) {
+      existingDropdown.remove();
+      return;
+    }
+
+    // TODO: Replace with actual fetch request to backend
+    // const cellIds = await fetchCellIdsFromBackend();
+
+    // Create and show dropdown with mock data
+    const dropdown = createCellIdDropdown(button.node);
+    document.body.appendChild(dropdown);
   });
 
   return button;
@@ -57,14 +129,14 @@ const plugin: JupyterFrontEndPlugin<void> = {
   optional: [ISettingRegistry],
   requires: [INotebookTracker],
   activate: (
-    app: JupyterFrontEnd,
+    _app: JupyterFrontEnd,
     notebookTracker: INotebookTracker,
     settingRegistry: ISettingRegistry | null
   ) => {
     console.log('JupyterLab extension nb_sync is activated!');
 
     // Add sync buttons to existing and new cells
-    notebookTracker.widgetAdded.connect((sender, notebookPanel) => {
+    notebookTracker.widgetAdded.connect((_sender, notebookPanel) => {
       const notebook = notebookPanel.content;
 
       // Add buttons to existing cells

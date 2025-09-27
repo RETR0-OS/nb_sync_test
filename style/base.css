@@ -55,3 +55,40 @@
 .jp-Cell:hover .nb-sync-button-container {
   opacity: 1;
 }
+
+/* Dropdown menu styles */
+.nb-sync-dropdown {
+  background: var(--jp-layout-color1);
+  border: 1px solid var(--jp-border-color1);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  min-width: 300px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.nb-sync-dropdown-content {
+  padding: 4px 0;
+}
+
+.nb-sync-dropdown-option {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-family: var(--jp-code-font-family);
+  font-size: 12px;
+  color: var(--jp-ui-font-color1);
+  border-bottom: 1px solid var(--jp-border-color2);
+}
+
+.nb-sync-dropdown-option:last-child {
+  border-bottom: none;
+}
+
+.nb-sync-dropdown-option:hover {
+  background: var(--jp-layout-color2);
+}
+
+.nb-sync-dropdown-option:active {
+  background: var(--jp-brand-color1);
+  color: var(--jp-ui-inverse-font-color1);
+}
