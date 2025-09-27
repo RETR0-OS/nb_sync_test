@@ -1,0 +1,8 @@
+{
+  "jupyter.lab.shortcuts": [],
+  "title": "nb_sync",
+  "description": "nb_sync settings.",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}
