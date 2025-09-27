@@ -1,103 +1,273 @@
-# nb_sync
+# JupyterLab Notebook Sync Extension
 
-[![Github Actions Status](https://github.com/RETR0-OS/nb_sync_test/workflows/Build/badge.svg)](https://github.com/RETR0-OS/nb_sync_test/actions/workflows/build.yml)
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/RETR0-OS/nb_sync_test/main?urlpath=lab)
+A JupyterLab extension that enables real-time collaboration between teachers and students with request-based synchronization.
 
+## Features
 
-A JupyterLab extension for teaching
+- **Teacher-Student Sessions**: Teachers create sessions, students join with session codes
+- **Request-Based Sync**: Students receive notifications but only sync when they choose to
+- **Cell-Level Control**: Teachers can toggle sync permissions per cell
+- **Redis Pub-Sub**: Scalable architecture using Redis for real-time messaging
+- **Persistent Updates**: Updates stored in Redis until students request them
 
-This extension is composed of a Python package named `nb_sync`
-for the server extension and a NPM package named `nb_sync`
-for the frontend extension.
+## Architecture
 
-## Requirements
+- **Backend**: Tornado WebSocket handlers with Redis pub-sub
+- **Session Management**: In-memory connection tracking with Redis persistence
+- **Notifications**: Students get notified of available updates, not automatic syncs
+- **Security**: Role-based permissions and input validation
 
-- JupyterLab >= 4.0.0
+## Installation
 
-## Install
+### 1. Start Redis
 
-To install the extension, execute:
+Start Redis using Docker:
 
 ```bash
-pip install nb_sync
+# From the project root directory
+docker-compose up -d
 ```
 
-## Uninstall
-
-To remove the extension, execute:
-
+Or install Redis manually:
 ```bash
-pip uninstall nb_sync
+# On macOS
+brew install redis
+brew services start redis
+
+# On Ubuntu
+sudo apt update
+sudo apt install redis-server
+sudo systemctl start redis
 ```
 
-## Troubleshoot
-
-If you are seeing the frontend extension, but it is not working, check
-that the server extension is enabled:
+### 2. Install the Extension
 
 ```bash
+# Clone the repository
+git clone https://github.com/your-username/jupyter-notebook-sync.git
+cd jupyter-notebook-sync
+
+# Install in development mode
+pip install -e .
+
+# Enable the server extension
+jupyter server extension enable jupyter_notebook_sync
+
+# Verify installation
 jupyter server extension list
 ```
 
-If the server extension is installed and enabled, but you are not seeing
-the frontend extension, check the frontend extension is installed:
+### 3. Start JupyterLab
 
 ```bash
-jupyter labextension list
+jupyter lab --autoreload
 ```
+
+## Usage
+
+### Teacher Workflow
+
+1. **Create Session**:
+   ```javascript
+   // Frontend JavaScript (connect to WebSocket)
+   const ws = new WebSocket('ws://localhost:8888/notebook-sync/ws');
+   
+   // Create session
+   ws.send(JSON.stringify({
+       type: 'create_session'
+   }));
+   ```
+
+2. **Push Cell Updates**:
+   ```javascript
+   ws.send(JSON.stringify({
+       type: 'push_cell',
+       cell_id: 'cell_001',
+       content: { source: 'print("Hello, students!")' },
+       metadata: { sync_allowed: true }
+   }));
+   ```
+
+3. **Toggle Sync Permissions**:
+   ```javascript
+   ws.send(JSON.stringify({
+       type: 'toggle_sync',
+       cell_id: 'cell_001',
+       sync_allowed: false
+   }));
+   ```
+
+### Student Workflow
+
+1. **Join Session**:
+   ```javascript
+   ws.send(JSON.stringify({
+       type: 'join_session',
+       session_code: 'ABC123'
+   }));
+   ```
+
+2. **Listen for Notifications**:
+   ```javascript
+   ws.onmessage = (event) => {
+       const data = JSON.parse(event.data);
+       
+       if (data.type === 'update_available') {
+           // Show UI indicator that update is available
+           showUpdateNotification(data.cell_id, data.timestamp);
+       }
+   };
+   ```
+
+3. **Request Sync** (when student chooses):
+   ```javascript
+   ws.send(JSON.stringify({
+       type: 'request_sync',
+       cell_id: 'cell_001'
+   }));
+   ```
+
+## Message Protocol
+
+### Teacher Messages
+
+- `create_session`: Create new session
+- `push_cell`: Push cell content (stores in Redis, notifies students)
+- `toggle_sync`: Enable/disable sync for specific cells
+- `end_session`: End the session
+
+### Student Messages
+
+- `join_session`: Join existing session with code
+- `request_sync`: Request specific cell content
+
+### Server Responses
+
+- `session_created`: Session creation confirmation
+- `session_joined`: Session join confirmation
+- `update_available`: Notification of available update (NOT content)
+- `cell_content_update`: Actual cell content (only after request)
+- `sync_allowed_update`: Sync permission changes
+- `error`: Error messages
+
+## Configuration
+
+### Redis Configuration
+
+Set Redis URL in environment variables:
+
+```bash
+export REDIS_URL="redis://localhost:6379"
+```
+
+### Extension Settings
+
+The extension can be configured via Jupyter configuration:
+
+```python
+# jupyter_lab_config.py
+c.NotebookSyncExtensionApp.redis_url = "redis://localhost:6379"
+```
+
+## Development
+
+### Setup Development Environment
+
+```bash
+# Install in development mode
+pip install -e .
+
+# Install development dependencies
+pip install -e ".[test]"
+
+# Run tests
+pytest
+```
+
+### Running Tests
+
+```bash
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=jupyter_notebook_sync
+
+# Run specific test
+pytest tests/test_handlers.py::test_websocket_connection
+```
+
+### Code Structure
+
+```
+jupyter_notebook_sync/
+├── __init__.py          # Extension entry point
+├── handlers.py          # WebSocket and HTTP handlers
+├── session_manager.py   # Session and connection management
+└── redis_client.py      # Redis client and operations
+```
+
+## Security Considerations
+
+- **Origin Checking**: Implement proper origin validation for production
+- **Authentication**: Integrate with JupyterLab's authentication system
+- **Input Validation**: All message content is validated and sanitized
+- **Rate Limiting**: Consider adding rate limiting for WebSocket messages
+- **Redis Security**: Use Redis AUTH and TLS in production
+
+## Troubleshooting
+
+### Redis Connection Issues
+
+```bash
+# Check Redis status
+redis-cli ping
+
+# Check Redis logs
+docker logs jupyter-sync-redis
+```
+
+### Extension Not Loading
+
+```bash
+# Check if extension is enabled
+jupyter server extension list
+
+# Check JupyterLab logs
+jupyter lab --debug
+```
+
+### WebSocket Connection Failed
+
+1. Check if extension is properly registered
+2. Verify Redis is running
+3. Check browser console for errors
+4. Verify WebSocket URL in client code
+
+## API Reference
+
+### HTTP Endpoints
+
+- `GET /notebook-sync/status`: Extension status and health check
+
+### WebSocket Endpoint
+
+- `ws://localhost:8888/notebook-sync/ws`: Main WebSocket connection
+
+### Redis Keys
+
+- `session:{session_code}`: Session metadata
+- `pending_update:{session_code}:{cell_id}`: Stored cell updates
+- Channel: `sync_session_{session_code}`: Pub-sub notifications
 
 ## Contributing
 
-### Development install
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a pull request
 
-Note: You will need NodeJS to build the extension package.
+## License
 
-The `jlpm` command is JupyterLab's pinned version of
-[yarn](https://yarnpkg.com/) that is installed with JupyterLab. You may use
-`yarn` or `npm` in lieu of `jlpm` below.
-
-```bash
-# Clone the repo to your local environment
-# Change directory to the nb_sync directory
-# Install package in development mode
-pip install -e "."
-# Link your development version of the extension with JupyterLab
-jupyter labextension develop . --overwrite
-# Server extension must be manually installed in develop mode
-jupyter server extension enable nb_sync
-# Rebuild extension Typescript source after making changes
-jlpm build
-```
-
-You can watch the source directory and run JupyterLab at the same time in different terminals to watch for changes in the extension's source and automatically rebuild the extension.
-
-```bash
-# Watch the source directory in one terminal, automatically rebuilding when needed
-jlpm watch
-# Run JupyterLab in another terminal
-jupyter lab
-```
-
-With the watch command running, every saved change will immediately be built locally and available in your running JupyterLab. Refresh JupyterLab to load the change in your browser (you may need to wait several seconds for the extension to be rebuilt).
-
-By default, the `jlpm build` command generates the source maps for this extension to make it easier to debug using the browser dev tools. To also generate source maps for the JupyterLab core extensions, you can run the following command:
-
-```bash
-jupyter lab build --minimize=False
-```
-
-### Development uninstall
-
-```bash
-# Server extension must be manually disabled in develop mode
-jupyter server extension disable nb_sync
-pip uninstall nb_sync
-```
-
-In development mode, you will also need to remove the symlink created by `jupyter labextension develop`
-command. To find its location, you can run `jupyter labextension list` to figure out where the `labextensions`
-folder is located. Then you can remove the symlink named `nb_sync` within that folder.
-
-### Packaging the extension
-
-See [RELEASE](RELEASE.md)
+BSD 3-Clause License
