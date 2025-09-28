@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 
 
 def get_current_role() -> str:
-    """Get current user role from environment variable only."""
-    return 'teacher' if os.getenv('JUPYTER_TEACHER_MODE', '').lower() in ('true', '1', 'yes') else 'student'
+    """Get current user role - hard-coded as teacher (change to 'student' for student instances)."""
+    return 'teacher'  # Change this to 'student' for student instances
 
 
 def get_machine_id(handler) -> str:
@@ -99,6 +99,22 @@ class StatusHandler(JsonAPIHandler):
             },
             "network_mode": "docker_redis",
             "machine_id": get_machine_id(self)
+        }
+        self.finish(json.dumps(payload))
+
+
+class RoleHandler(JsonAPIHandler):
+    """Handler to get current user role from backend (environment-based)"""
+    async def get(self):
+        current_role = get_current_role()
+        machine_id = get_machine_id(self)
+
+        payload = {
+            "type": "role_info",
+            "role": current_role,
+            "role_source": "hard_coded",
+            "config_note": "Change get_current_role() return value to 'student' for student instances",
+            "machine_id": machine_id
         }
         self.finish(json.dumps(payload))
 
@@ -499,6 +515,7 @@ def setup_handlers(web_app):
     handlers = [
         # Core status and network endpoints
         (url_path_join(api_base, "status"), StatusHandler),  # GET - Enhanced Docker Redis status
+        (url_path_join(api_base, "role"), RoleHandler),  # GET - Role determination from environment
         (url_path_join(api_base, "docker", "redis"), DockerRedisHandler),  # GET/POST - Docker Redis management
         (url_path_join(api_base, "network", "info"), NetworkInfoHandler),  # GET - Network discovery with Docker info
 

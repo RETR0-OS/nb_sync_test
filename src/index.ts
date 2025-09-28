@@ -15,9 +15,10 @@ import {
   pushCellByHash,
   createSession,
   fetchNetworkInfo,
-  testRedisConnection
+  testRedisConnection,
+  getDockerRedisStatus
 } from './handler';
-import { UserRole, determineUserRole, setUserRole } from './auth';
+import { UserRole, determineUserRole, setUserRole, fetchUserRoleFromBackend } from './auth';
 
 import { Chart, registerables } from 'chart.js';
 Chart.register(...registerables);
@@ -154,14 +155,40 @@ async function initializeExtension(): Promise<void> {
     // Load session state from localStorage
     loadSessionState();
 
-    // Determine role using simple logic (URL params + localStorage)
-    const role = determineUserRole();
-    await setCurrentUserRole(role);
+    // Get authoritative role from backend (hard-coded in backend)
+    const backendRole = await fetchUserRoleFromBackend();
 
-    console.log(`Extension initialized in ${role} mode`);
+    // Also check frontend preferences for immediate UI updates
+    const frontendRole = determineUserRole();
+
+    // Use backend role as source of truth, but sync localStorage
+    if (backendRole !== frontendRole) {
+      console.log(`Role mismatch detected: backend=${backendRole}, frontend=${frontendRole}. Using backend role.`);
+      setUserRole(backendRole); // Sync localStorage
+    }
+
+    await setCurrentUserRole(backendRole);
+    console.log(`Extension initialized in ${backendRole} mode (hard-coded in backend)`);
+
+    // Validate Redis connection before proceeding
+    let redisConnected = false;
+    try {
+      console.log('Validating Redis connection...');
+      const redisStatus = await getDockerRedisStatus();
+      redisConnected = redisStatus.docker_redis.connected;
+
+      if (redisConnected) {
+        console.log('Redis connection validated successfully');
+      } else {
+        console.warn('Redis connection failed:', redisStatus.docker_redis.error);
+      }
+    } catch (error) {
+      console.error('Redis validation failed:', error);
+      redisConnected = false;
+    }
 
     // Initialize based on role
-    if (role === 'teacher') {
+    if (backendRole === 'teacher') {
       if (!sessionReady) {
         await autoCreateTeacherSessionAndShare();
       }

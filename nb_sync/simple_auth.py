@@ -8,8 +8,8 @@ from typing import Dict, Any
 
 
 def get_user_role() -> str:
-    """Get user role from environment variable only."""
-    return 'teacher' if os.getenv('JUPYTER_TEACHER_MODE', '').lower() in ('true', '1', 'yes') else 'student'
+    """Get user role - hard-coded as teacher (change to 'student' for student instances)."""
+    return 'teacher'  # Change this to 'student' for student instances
 
 
 def get_role_config() -> Dict[str, Any]:

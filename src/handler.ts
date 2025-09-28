@@ -190,6 +190,21 @@ export async function fetchNetworkInfo(): Promise<INetworkInfoResponse> {
   return requestAPI<INetworkInfoResponse>('network/info', { method: 'GET' });
 }
 
+export interface RoleInfoResponse {
+  type: 'role_info';
+  role: 'teacher' | 'student';
+  role_source: 'hard_coded';
+  config_note: string;
+  machine_id: string;
+}
+
+/**
+ * Get current user role from backend (environment-based)
+ */
+export async function fetchUserRole(): Promise<RoleInfoResponse> {
+  return requestAPI<RoleInfoResponse>('role', { method: 'GET' });
+}
+
 /**
  * Docker Redis testing and management functions
  */

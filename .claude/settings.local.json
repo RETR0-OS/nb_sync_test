@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(jlpm build:*)",
+      "Bash(python -c \"import asyncio; from nb_sync.handlers import RoleHandler; from unittest.mock import Mock; h = RoleHandler(Mock(), Mock()); h.get_json = lambda: {}; h.get_machine_id = lambda s: ''test''; import json; import nb_sync.handlers as handlers; print(''Role handler test - get_current_role():'', handlers.get_current_role())\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

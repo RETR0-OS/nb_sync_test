@@ -35,7 +35,7 @@ async def _initialize_redis():
     try:
         await redis_manager.initialize()
         logger.info("Redis connection initialized successfully")
-        logger.info(f"Running in {get_user_role()} mode")
+        logger.info(f"Running in {get_user_role()} mode (hard-coded in get_user_role())")
     except Exception as e:
         logger.error(f"Failed to initialize Redis: {e}")
         raise
@@ -67,4 +67,4 @@ def _load_jupyter_server_extension(server_app):
 
     name = "nb_sync"
     server_app.log.info(f"Registered {name} server extension")
-    server_app.log.info(f"Extension running in {get_user_role()} mode")
+    server_app.log.info(f"Extension running in {get_user_role()} mode (hard-coded in get_user_role())")
