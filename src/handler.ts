@@ -148,10 +148,9 @@ export async function endSession(code: string): Promise<void> {
 }
 
 export async function pushCellToSession(code: string, cell_id: string, content: any, metadata: any): Promise<any> {
-  return requestAPI<any>(`sessions/${code}/cells`, {
+  return requestAPI<any>(`sessions/${code}/cells/${cell_id}/push`, {
     method: 'POST',
     body: JSON.stringify({
-      cell_id,
       content,
       metadata
     })
@@ -159,8 +158,8 @@ export async function pushCellToSession(code: string, cell_id: string, content: 
 }
 
 export async function toggleCellSync(code: string, cell_id: string, sync_allowed: boolean): Promise<any> {
-  return requestAPI<any>(`sessions/${code}/cells/${cell_id}/sync`, {
-    method: 'PATCH',
+  return requestAPI<any>(`sessions/${code}/cells/${cell_id}/toggle`, {
+    method: 'POST',
     body: JSON.stringify({
       sync_allowed
     })
@@ -174,7 +173,7 @@ export async function getPendingStatus(code: string, cell_id: string): Promise<a
 }
 
 export async function requestCellSync(code: string, cell_id: string): Promise<any> {
-  return requestAPI<any>(`sessions/${code}/cells/${cell_id}/sync-request`, {
+  return requestAPI<any>(`sessions/${code}/cells/${cell_id}/request-sync`, {
     method: 'POST'
   });
 }

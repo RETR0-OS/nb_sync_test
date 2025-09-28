@@ -34,15 +34,19 @@ export class AuthService {
   static async validateSession(): Promise<IAuthResponse> {
     try {
       // Attempt backend role lookup (adjust endpoint as needed)
-      const data = await requestAPI<any>('auth/role');
+      const data = await requestAPI<any>('auth/validate');
+      console.log('AuthService.validateSession response:', data);
       if (data?.authenticated && (data.role === 'teacher' || data.role === 'student')) {
         return { authenticated: true, role: data.role };
       }
       return { authenticated: false, message: data?.message || 'Unauthenticated' };
     } catch (err) {
-      console.warn('AuthService.validateSession fallback (treating as student):', err);
-      // Fallback: default to student so UI still works
-      return { authenticated: true, role: 'student', message: 'Fallback student role (no backend auth).' };
+      console.warn('AuthService.validateSession error (proceeding without backend auth):', err);
+      // Graceful fallback: return unauthenticated but don't block functionality
+      return { 
+        authenticated: false, 
+        message: 'Backend authentication unavailable - proceeding with limited functionality.' 
+      };
     }
   }
 }

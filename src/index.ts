@@ -28,6 +28,7 @@ let syncEnabled = false;
 let sessionCode: string | null = null;
 let teacherIp: string | null = null;
 let sessionReady = false;
+let creatingSession = false;
 
 /**
  * Load session state from localStorage
@@ -104,62 +105,9 @@ function ensureCellIdentity(cell: Cell): void {
 }
 
 /**
- * Create authentication error dialog
- */
-function createAuthErrorDialog(errorMessage: string): void {
-  // Create overlay
-  const overlay = document.createElement('div');
-  overlay.className = 'nb-sync-role-overlay';
-
-  // Create dialog
-  const dialog = document.createElement('div');
-  dialog.className = 'nb-sync-role-dialog';
-
-  // Create title
-  const title = document.createElement('h2');
-  title.textContent = 'Authentication Required';
-  title.className = 'nb-sync-role-title';
-
-  // Create error message
-  const errorPara = document.createElement('p');
-  errorPara.textContent = errorMessage;
-  errorPara.className = 'nb-sync-role-subtitle';
-  errorPara.style.color = '#d32f2f';
-
-  // Create retry button
-  const retryButton = document.createElement('button');
-  retryButton.textContent = '🔄 Retry Authentication';
-  retryButton.className = 'nb-sync-role-button nb-sync-teacher-button';
-  retryButton.addEventListener('click', async () => {
-    overlay.remove();
-    await initializeAuthentication();
-  });
-
-  // Create info about role configuration
-  const infoPara = document.createElement('p');
-  infoPara.innerHTML = `
-    <strong>Note:</strong> User roles are configured via environment variables:<br>
-    • Set <code>JUPYTER_TEACHER_MODE=true</code> to enable teacher mode<br>
-    • Or add user to <code>JUPYTER_TEACHER_USERS</code> list
-  `;
-  infoPara.className = 'nb-sync-role-subtitle';
-  infoPara.style.fontSize = '0.9em';
-  infoPara.style.color = '#666';
-
-  // Assemble dialog
-  dialog.appendChild(title);
-  dialog.appendChild(errorPara);
-  dialog.appendChild(retryButton);
-  dialog.appendChild(infoPara);
-
-  overlay.appendChild(dialog);
-  document.body.appendChild(overlay);
-}
-
-/**
  * Set user role and initialize appropriate features
  * Now uses authenticated backend role instead of localStorage
- */
+ */ 
 async function setUserRole(role: UserRole): Promise<void> {
   currentUserRole = role;
   console.log(`User role set to: ${role}`);
@@ -203,6 +151,8 @@ async function checkAuthenticatedRole(): Promise<boolean> {
     console.log('Checking authentication with backend...');
     const authResult = await AuthService.validateSession();
 
+    console.log('Auth result:', authResult);
+
     if (authResult.authenticated && authResult.role) {
       console.log('Valid authenticated role found:', authResult.role);
       await setUserRole(authResult.role);
@@ -222,32 +172,42 @@ async function checkAuthenticatedRole(): Promise<boolean> {
  */
 async function initializeAuthentication(): Promise<void> {
   try {
+    // First, try to get role from backend for UI features
     const isAuthenticated = await checkAuthenticatedRole();
 
-    if (isAuthenticated) {
-      // Authentication successful, UI should already be initialized by setUserRole
-      console.log('Authentication successful, UI initialized');
+    // Initialize session state regardless of auth
+    loadSessionState();
 
-      // Initialize session state
-      loadSessionState();
+    if (isAuthenticated && currentUserRole === 'teacher') {
+      // Full teacher features with authenticated role
+      console.log('Authenticated teacher - enabling full features');
 
       if (!sessionReady) {
-        if (currentUserRole === 'teacher') {
-          // Auto-create session (no manual prompts)
-          await autoCreateTeacherSessionAndShare();
-        } else if (currentUserRole === 'student') {
-          showStudentSessionSetupModal();
-        }
+        // Auto-create session for authenticated teachers
+        await autoCreateTeacherSessionAndShare();
       }
+    } else if (!sessionReady) {
+      // Try to create teacher session without auth (fallback)
+      console.log('Attempting teacher session creation without auth...');
+      await createTeacherSessionFallback();
     } else {
-      // Authentication failed, show error dialog
-      const errorMessage = 'Could not authenticate with Jupyter session. Please check your session and role configuration.';
-      createAuthErrorDialog(errorMessage);
+      // If session already exists, determine role or default to student
+      if (!currentUserRole) {
+        await setUserRole('student');
+      }
     }
   } catch (error) {
     console.error('Authentication initialization failed:', error);
-    const errorMessage = `Authentication error: ${error}`;
-    createAuthErrorDialog(errorMessage);
+    // Fallback: still allow basic functionality
+    console.log('Falling back to basic functionality without auth');
+    
+    if (!currentUserRole) {
+      await setUserRole('student');
+    }
+    
+    if (!sessionReady) {
+      showStudentSessionSetupModal();
+    }
   }
 }
 
@@ -711,6 +671,57 @@ function showTeacherShareModal(sessionCode: string, ipAddresses: string[]): void
   });
   dialog.appendChild(copyCodeBtn);
 
+  // Teacher IP (primary) section - prefer public/non-loopback IPs
+  const isIpv4 = (ip: string) => /^(\d{1,3}\.){3}\d{1,3}$/.test(ip);
+  const isLoopback = (ip: string) => ip === '::1' || ip.startsWith('127.');
+  const isLinkLocal = (ip: string) => isIpv4(ip) ? ip.startsWith('169.254.') : ip.toLowerCase().startsWith('fe80:');
+  const isPrivateV4 = (ip: string) => ip.startsWith('10.') || ip.startsWith('192.168.') || /^172\.(1[6-9]|2\d|3[0-1])\./.test(ip);
+  const isUniqueLocalV6 = (ip: string) => ip.toLowerCase().startsWith('fc00:') || ip.toLowerCase().startsWith('fd00:');
+
+  const candidates = (ipAddresses || []).filter(Boolean);
+  // 1) Public IPv4
+  let primaryIp = candidates.find(ip => isIpv4(ip) && !isLoopback(ip) && !isLinkLocal(ip) && !isPrivateV4(ip));
+  // 2) Global IPv6 (not loopback/link-local/unique-local)
+  if (!primaryIp) {
+    primaryIp = candidates.find(ip => !isIpv4(ip) && !isLoopback(ip) && !isLinkLocal(ip) && !isUniqueLocalV6(ip));
+  }
+  // 3) Private/LAN IPv4 (usable on the same network)
+  if (!primaryIp) {
+    primaryIp = candidates.find(ip => isIpv4(ip) && !isLoopback(ip) && !isLinkLocal(ip));
+  }
+  // 4) Fallback to hostname if it's not localhost
+  if (!primaryIp) {
+    const hn = window.location.hostname;
+    if (hn && hn !== 'localhost' && hn !== '127.0.0.1') {
+      primaryIp = hn;
+    }
+  }
+
+  const tipLabel = document.createElement('div');
+  tipLabel.className = 'nb-sync-share-label';
+  tipLabel.style.marginTop = '14px';
+  tipLabel.textContent = 'Teacher IP';
+  dialog.appendChild(tipLabel);
+
+  const tipRow = document.createElement('div');
+  tipRow.className = 'nb-sync-share-ip-primary-row';
+
+  const tipBox = document.createElement('div');
+  tipBox.className = 'nb-sync-share-ip-primary';
+  tipBox.textContent = primaryIp ? String(primaryIp) : 'Not detected — use one of the IPs below';
+  tipRow.appendChild(tipBox);
+
+  const copyIpBtn = document.createElement('button');
+  copyIpBtn.className = 'nb-sync-share-copy-btn small';
+  copyIpBtn.textContent = 'Copy IP';
+  copyIpBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(String(primaryIp)).catch(() => {});
+    copyIpBtn.textContent = 'Copied!';
+    setTimeout(() => (copyIpBtn.textContent = 'Copy IP'), 1200);
+  });
+  tipRow.appendChild(copyIpBtn);
+  dialog.appendChild(tipRow);
+
   const ipLabel = document.createElement('div');
   ipLabel.className = 'nb-sync-share-label';
   ipLabel.style.marginTop = '14px';
@@ -808,6 +819,24 @@ function ensureShareModalStyles(): void {
     text-align: center;
     user-select: all;
   }
+  .nb-sync-share-ip-primary-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .nb-sync-share-ip-primary {
+    flex: 1 1 auto;
+    font-family: monospace;
+    font-size: 1.1rem;
+    font-weight: 600;
+    background: var(--jp-layout-color2, #f5f5f5);
+    color: var(--jp-ui-font-color1, #111);
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--jp-border-color2, #ccc);
+    word-break: break-all;
+  }
   .nb-sync-share-copy-btn {
     margin-top: 10px;
     background: #1976d2;
@@ -880,9 +909,15 @@ function ensureShareModalStyles(): void {
  * Auto-create teacher session and show share modal (no fallback prompts)
  */
 async function autoCreateTeacherSessionAndShare(): Promise<void> {
-  if (sessionReady) return;
+  // Guard: only teachers should auto-create sessions
+  if (currentUserRole !== 'teacher') return;
+  if (sessionReady || creatingSession) return;
+  
   try {
+    creatingSession = true;
     console.log('Creating teacher session automatically...');
+    
+    // Create session without auth check (backend now allows this)
     const res = await createSession();
     sessionCode = res.session_code;
     sessionReady = true;
@@ -901,8 +936,57 @@ async function autoCreateTeacherSessionAndShare(): Promise<void> {
     }
     showTeacherShareModal(sessionCode, ipAddresses);
     addSyncButtonsToAllCells();
-  } catch (e) {
+  } catch (e: any) {
     console.error('Automatic session creation failed:', e);
+    
+    // If this fails, fall back to student mode
+    console.log('Falling back to student mode after session creation failure');
+    await setUserRole('student');
+    showStudentSessionSetupModal();
+  } finally {
+    creatingSession = false;
+  }
+}
+
+/**
+ * Create teacher session for unauthenticated users who might be teachers
+ */
+async function createTeacherSessionFallback(): Promise<void> {
+  if (sessionReady || creatingSession) return;
+  
+  try {
+    creatingSession = true;
+    console.log('Attempting to create teacher session without auth...');
+    
+    // Try to create session - this should work now without auth
+    const res = await createSession();
+    sessionCode = res.session_code;
+    sessionReady = true;
+    saveSessionState();
+    console.log('Session created successfully:', sessionCode);
+    
+    // Set role to teacher since session creation worked
+    await setUserRole('teacher');
+
+    let ipAddresses: string[] = [];
+    try {
+      const netInfo = await fetchNetworkInfo();
+      ipAddresses = netInfo.ip_addresses || [];
+    } catch (e) {
+      console.error('Failed to fetch network info:', e);
+    }
+    if (!ipAddresses.length) {
+      ipAddresses = [window.location.hostname || '127.0.0.1'];
+    }
+    showTeacherShareModal(sessionCode, ipAddresses);
+    addSyncButtonsToAllCells();
+  } catch (e: any) {
+    console.error('Teacher session fallback failed:', e);
+    // If this fails, fall back to student mode
+    await setUserRole('student');
+    showStudentSessionSetupModal();
+  } finally {
+    creatingSession = false;
   }
 }
 
@@ -924,11 +1008,6 @@ const plugin: JupyterFrontEndPlugin<void> = {
 
     // Update the addSyncButtonsToAllCells function first
     addSyncButtonsToAllCells = () => {
-      if (!sessionReady) {
-        console.log('Session not ready, skipping sync button injection.');
-        return;
-      }
-
       console.log('Adding sync buttons to all cells, current role:', currentUserRole);
       notebookTracker.forEach(notebookPanel => {
         const notebook = notebookPanel.content;
@@ -1029,13 +1108,13 @@ const plugin: JupyterFrontEndPlugin<void> = {
         });
     }
 
-    requestAPI<any>('notebook-sync')
+    requestAPI<any>('status')
       .then(data => {
         console.log(data);
       })
       .catch(reason => {
         console.error(
-          `The nb_sync server extension appears to be missing.\n${reason}`
+          `The nb_sync server status endpoint failed.\n${reason}`
         );
       });
   }

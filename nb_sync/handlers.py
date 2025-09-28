@@ -90,12 +90,13 @@ class StatusHandler(JsonAPIHandler):
 
 
 class SessionCreateHandler(JsonAPIHandler):
-    @teacher_required
+    # Remove @teacher_required decorator - no auth check needed for session creation
     async def post(self):
-        user_info = get_current_user_info(self)
-        teacher_id = user_info['user_id']
-
+        # Use a default teacher_id or generate one since we don't need auth
+        teacher_id = "default_teacher"
+        
         code = await session_service.create_session(teacher_id)
+        print("session code:", code)
         self.set_status(201)
         self.finish(json.dumps({
             "type": "session_created",
@@ -106,10 +107,10 @@ class SessionCreateHandler(JsonAPIHandler):
 
 
 class SessionJoinHandler(JsonAPIHandler):
-    @student_required
+    # Remove @student_required decorator - no auth check needed for joining
     async def post(self, code: str):
-        user_info = get_current_user_info(self)
-        student_id = user_info['user_id']
+        # Use a default student_id or generate one since we don't need auth
+        student_id = f"student_{self.request.remote_ip or 'anonymous'}"
 
         ok = await session_service.join_session(code, student_id)
         if not ok:
@@ -399,7 +400,7 @@ class RequestCellSyncHashHandler(JsonAPIHandler):
 
 
 class NetworkInfoHandler(JsonAPIHandler):
-    @teacher_required
+    # Remove @teacher_required decorator - no auth check needed for network info
     async def get(self):
         try:
             ip_addresses = _get_private_ipv4_addresses()

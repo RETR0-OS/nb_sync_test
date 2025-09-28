@@ -42,29 +42,7 @@ def extract_user_id_from_jupyter_session(handler: APIHandler) -> Optional[str]:
             elif isinstance(user, str):
                 # Sometimes it's just a string
                 return user
-
-        # Method 2: Try to get from request headers (set by Jupyter)
-        auth_header = handler.request.headers.get('Authorization', '')
-        if auth_header.startswith('token '):
-            # Extract user from token (this would need token validation in real scenario)
-            # For now, we'll use a simplified approach
-            pass
-
-        # Method 3: Get from X-User header if available
-        x_user = handler.request.headers.get('X-User')
-        if x_user:
-            return x_user
-
-        # Method 4: Use session cookies to identify user
-        session_cookie = handler.get_secure_cookie('username')
-        if session_cookie:
-            return session_cookie.decode('utf-8')
-
-        # Method 5: Fallback to a default user for development
-        # In production, this should be removed
-        default_user = os.getenv('JUPYTER_DEFAULT_USER', 'jupyter_user')
-        logger.warning(f"Using default user '{default_user}' for authentication")
-        return default_user
+        return None
 
     except Exception as e:
         logger.error(f"Error extracting user ID from session: {e}")
