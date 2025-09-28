@@ -49,6 +49,7 @@ class RedisManager:
     - Uses SHA256 hash of cell_id:created_at as Redis key for uniqueness
     """
     def __init__(self, redis_url: Optional[str] = None):
+        # Docker Redis configuration - supports both local Docker and networked Redis
         self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://localhost:6379")
         self._client: Optional[redis.Redis] = None
 

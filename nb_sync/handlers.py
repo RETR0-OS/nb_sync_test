@@ -1,19 +1,30 @@
 # jupyter_notebook_sync/handlers.py
 import json
 import logging
+import os
 import socket
+import time
 from typing import Any, Dict, Optional
 
 from jupyter_server.base.handlers import APIHandler
 from jupyter_server.utils import url_path_join
 from tornado import web
 
-from .auth import authenticated, teacher_required, student_required, get_current_user_info, AuthValidationHandler
 from .redis_client import redis_manager
 from .session_manager import session_service
-from .role_manager import role_manager
 
 logger = logging.getLogger(__name__)
+
+
+def get_current_role() -> str:
+    """Get current user role from environment variable only."""
+    return 'teacher' if os.getenv('JUPYTER_TEACHER_MODE', '').lower() in ('true', '1', 'yes') else 'student'
+
+
+def get_machine_id(handler) -> str:
+    """Generate machine-based identifier instead of user ID."""
+    remote_ip = handler.request.remote_ip or 'localhost'
+    return f"machine_{remote_ip}_{int(time.time())}"
 
 
 def _get_private_ipv4_addresses() -> list[str]:
@@ -59,60 +70,61 @@ class JsonAPIHandler(APIHandler):
             return {}
 
     def requester_id(self) -> str:
-        # Get authenticated user ID, fall back to header or anonymous
-        user_info = get_current_user_info(self)
-        if user_info.get('authenticated') and user_info.get('user_id'):
-            return user_info['user_id']
-        return self.request.headers.get("X-Client-Id", "anonymous")
+        # Simple machine-based identifier
+        return get_machine_id(self)
 
 
 class StatusHandler(JsonAPIHandler):
-    @authenticated()
     async def get(self):
         try:
             await redis_manager.client.ping()
             redis_status = "connected"
+            redis_info = await redis_manager.client.info()
+            redis_version = redis_info.get('redis_version', 'unknown')
         except Exception as e:
             redis_status = f"error: {e}"
+            redis_version = "unknown"
 
-        user_info = get_current_user_info(self)
+        current_role = get_current_role()
+
         payload = {
-            "extension": "jupyter-notebook-sync",
+            "extension": "nb-sync",
             "status": "running",
-            "redis": redis_status,
-            "user": {
-                "user_id": user_info.get('user_id'),
-                "role": user_info.get('role'),
-                "authenticated": user_info.get('authenticated', False)
-            }
+            "role": current_role,
+            "redis": {
+                "status": redis_status,
+                "version": redis_version,
+                "url": redis_manager.redis_url,
+                "docker": True
+            },
+            "network_mode": "docker_redis",
+            "machine_id": get_machine_id(self)
         }
         self.finish(json.dumps(payload))
 
 
 class SessionCreateHandler(JsonAPIHandler):
-    # Remove @teacher_required decorator - no auth check needed for session creation
     async def post(self):
-        # Use a default teacher_id or generate one since we don't need auth
-        teacher_id = "default_teacher"
-        
-        code = await session_service.create_session(teacher_id)
+        # Simple session creation without authentication
+        machine_id = get_machine_id(self)
+
+        code = await session_service.create_session(machine_id)
         print("session code:", code)
         self.set_status(201)
         self.finish(json.dumps({
             "type": "session_created",
             "session_code": code,
-            "role": "teacher",
-            "teacher_id": teacher_id
+            "role": get_current_role(),
+            "machine_id": machine_id
         }))
 
 
 class SessionJoinHandler(JsonAPIHandler):
-    # Remove @student_required decorator - no auth check needed for joining
     async def post(self, code: str):
-        # Use a default student_id or generate one since we don't need auth
-        student_id = f"student_{self.request.remote_ip or 'anonymous'}"
+        # Simple session joining without authentication
+        machine_id = get_machine_id(self)
 
-        ok = await session_service.join_session(code, student_id)
+        ok = await session_service.join_session(code, machine_id)
         if not ok:
             self.set_status(404)
             self.finish(json.dumps({"type": "error", "message": "Session not found or inactive"}))
@@ -120,30 +132,23 @@ class SessionJoinHandler(JsonAPIHandler):
         self.finish(json.dumps({
             "type": "session_joined",
             "session_code": code,
-            "role": "student",
-            "student_id": student_id
+            "role": get_current_role(),
+            "machine_id": machine_id
         }))
 
 
 class SessionEndHandler(JsonAPIHandler):
-    @teacher_required
     async def delete(self, code: str):
-        user_info = get_current_user_info(self)
-        teacher_id = user_info['user_id']
-
-        # Verify teacher owns this session
-        session_valid = await session_service.verify_session_owner(code, teacher_id)
-        if not session_valid:
-            self.set_status(403)
-            self.finish(json.dumps({"type": "error", "message": "Not authorized to end this session"}))
-            return
-
+        # Anyone can end a session - no ownership verification
         await session_service.end_session(code)
-        self.finish(json.dumps({"type": "session_ended", "session_code": code}))
+        self.finish(json.dumps({
+            "type": "session_ended",
+            "session_code": code,
+            "ended_by": get_machine_id(self)
+        }))
 
 
 class SessionValidateHandler(JsonAPIHandler):
-    @authenticated()
     async def get(self, code: str):
         session_info = await session_service.get_session_status(code)
         if not session_info:
@@ -155,22 +160,14 @@ class SessionValidateHandler(JsonAPIHandler):
             "type": "session_status",
             "session_code": code,
             "status": session_info["status"],
-            "teacher_id": session_info["teacher_id"]
+            "teacher_id": session_info["teacher_id"],
+            "requested_by": get_machine_id(self)
         }))
 
 
 class PushCellHandler(JsonAPIHandler):
-    @teacher_required
     async def post(self, code: str, cell_id: str):
-        user_info = get_current_user_info(self)
-        teacher_id = user_info['user_id']
-
-        # Verify teacher owns this session
-        session_valid = await session_service.verify_session_owner(code, teacher_id)
-        if not session_valid:
-            self.set_status(403)
-            self.finish(json.dumps({"type": "error", "message": "Not authorized to push to this session"}))
-            return
+        machine_id = get_machine_id(self)
 
         data = self.get_json()
         content = data.get("content")
@@ -180,25 +177,22 @@ class PushCellHandler(JsonAPIHandler):
             self.finish(json.dumps({"type": "error", "message": "content is required"}))
             return
 
-        # Add teacher ID to metadata
-        metadata['pushed_by'] = teacher_id
+        # Add machine ID to metadata
+        metadata['pushed_by'] = machine_id
+        metadata['role'] = get_current_role()
 
         ts = await session_service.push_cell(code, cell_id, content, metadata)
-        self.finish(json.dumps({"type": "push_confirmed", "cell_id": cell_id, "timestamp": ts}))
+        self.finish(json.dumps({
+            "type": "push_confirmed",
+            "cell_id": cell_id,
+            "timestamp": ts,
+            "pushed_by": machine_id
+        }))
 
 
 class ToggleSyncHandler(JsonAPIHandler):
-    @teacher_required
     async def post(self, code: str, cell_id: str):
-        user_info = get_current_user_info(self)
-        teacher_id = user_info['user_id']
-
-        # Verify teacher owns this session
-        session_valid = await session_service.verify_session_owner(code, teacher_id)
-        if not session_valid:
-            self.set_status(403)
-            self.finish(json.dumps({"type": "error", "message": "Not authorized to modify this session"}))
-            return
+        machine_id = get_machine_id(self)
 
         data = self.get_json()
         if "sync_allowed" not in data:
@@ -207,27 +201,19 @@ class ToggleSyncHandler(JsonAPIHandler):
             return
 
         sync_allowed = bool(data["sync_allowed"])
-        ts = await session_service.toggle_sync(code, cell_id, sync_allowed, teacher_id)
+        ts = await session_service.toggle_sync(code, cell_id, sync_allowed, machine_id)
         self.finish(json.dumps({
             "type": "sync_allowed_update",
             "cell_id": cell_id,
             "sync_allowed": sync_allowed,
-            "timestamp": ts
+            "timestamp": ts,
+            "toggled_by": machine_id
         }))
 
 
 class NotificationsHandler(JsonAPIHandler):
-    @authenticated()
     async def get(self, code: str):
-        user_info = get_current_user_info(self)
-        user_id = user_info['user_id']
-
-        # Verify user is in this session
-        session_valid = await session_service.verify_user_in_session(code, user_id)
-        if not session_valid:
-            self.set_status(403)
-            self.finish(json.dumps({"type": "error", "message": "Not authorized to access this session"}))
-            return
+        machine_id = get_machine_id(self)
 
         # since as float seconds; default to 0 for first poll
         since_param = self.get_query_argument("since", default="0")
@@ -238,52 +224,44 @@ class NotificationsHandler(JsonAPIHandler):
             self.finish(json.dumps({"type": "error", "message": "invalid since parameter"}))
             return
 
-        items = await session_service.list_notifications(code, since_ts, user_id)
-        self.finish(json.dumps({"type": "notifications", "items": items}))
+        items = await session_service.list_notifications(code, since_ts, machine_id)
+        self.finish(json.dumps({
+            "type": "notifications",
+            "items": items,
+            "requested_by": machine_id
+        }))
 
 
 class PendingCellHandler(JsonAPIHandler):
-    @authenticated()
     async def get(self, code: str, cell_id: str):
-        user_info = get_current_user_info(self)
-        user_id = user_info['user_id']
+        machine_id = get_machine_id(self)
 
-        # Verify user is in this session
-        session_valid = await session_service.verify_user_in_session(code, user_id)
-        if not session_valid:
-            self.set_status(403)
-            self.finish(json.dumps({"type": "error", "message": "Not authorized to access this session"}))
-            return
-
-        status = await session_service.get_pending_status(code, cell_id, user_id)
-        self.finish(json.dumps({"type": "pending_status", "cell_id": cell_id, **status}))
+        status = await session_service.get_pending_status(code, cell_id, machine_id)
+        self.finish(json.dumps({
+            "type": "pending_status",
+            "cell_id": cell_id,
+            "requested_by": machine_id,
+            **status
+        }))
 
 
 class RequestSyncHandler(JsonAPIHandler):
-    @student_required
     async def post(self, code: str, cell_id: str):
-        user_info = get_current_user_info(self)
-        student_id = user_info['user_id']
+        machine_id = get_machine_id(self)
 
-        # Verify student is in this session
-        session_valid = await session_service.verify_user_in_session(code, student_id)
-        if not session_valid:
-            self.set_status(403)
-            self.finish(json.dumps({"type": "error", "message": "Not authorized to access this session"}))
-            return
-
-        result = await session_service.request_sync(code, cell_id, student_id)
+        result = await session_service.request_sync(code, cell_id, machine_id)
         if not result:
             self.set_status(404)
             self.finish(json.dumps({"type": "error", "message": "No pending update available or sync not allowed"}))
             return
 
+        # Add machine info to result
+        result["requested_by"] = machine_id
         self.finish(json.dumps(result))
 
 
 # New hash-based read handlers
 class HashKeysListHandler(JsonAPIHandler):
-    @authenticated()
     async def get(self):
         # Optional query params for pagination and matching
         cursor_param = self.get_query_argument("cursor", default="0")
@@ -305,11 +283,11 @@ class HashKeysListHandler(JsonAPIHandler):
             count=count,
             redis_url_override=f"redis://{teacher_ip}:6379" if teacher_ip else None,
         )
+        result["requested_by"] = get_machine_id(self)
         self.finish(json.dumps({"type": "hash_keys", **result}))
 
 
 class HashKeyContentHandler(JsonAPIHandler):
-    @authenticated()
     async def get(self, hash_key: str):
         teacher_ip = self.get_query_argument("teacher_ip", default=None)
         data = await redis_manager.get_cell_by_hash(
@@ -320,6 +298,8 @@ class HashKeyContentHandler(JsonAPIHandler):
             self.set_status(404)
             self.finish(json.dumps({"type": "error", "message": "not found"}))
             return
+
+        data["requested_by"] = get_machine_id(self)
         self.finish(json.dumps({"type": "hash_key_content", "key": hash_key, **data}))
 
 
@@ -328,12 +308,10 @@ class HashKeyContentHandler(JsonAPIHandler):
 class PushCellHashHandler(JsonAPIHandler):
     """
     Handler for hash-based cell pushing (new specification).
-    Teacher pushes cell content with cell_id and created_at timestamp.
+    Anyone can push cell content with cell_id and created_at timestamp.
     """
-    @teacher_required
     async def post(self):
-        user_info = get_current_user_info(self)
-        teacher_id = user_info['user_id']
+        machine_id = get_machine_id(self)
 
         data = self.get_json()
         cell_id = data.get("cell_id")
@@ -344,7 +322,7 @@ class PushCellHashHandler(JsonAPIHandler):
         if not cell_id or not created_at or content is None:
             self.set_status(400)
             self.finish(json.dumps({
-                "type": "error", 
+                "type": "error",
                 "message": "cell_id, created_at, and content are required"
             }))
             return
@@ -355,19 +333,18 @@ class PushCellHashHandler(JsonAPIHandler):
             "cell_id": cell_id,
             "created_at": created_at,
             "hash_key": hash_key[:8],  # Only show first 8 chars for security
-            "teacher_id": teacher_id
+            "machine_id": machine_id,
+            "role": get_current_role()
         }))
 
 
 class RequestCellSyncHashHandler(JsonAPIHandler):
     """
     Handler for hash-based cell sync requests (new specification).
-    Student requests cell content using cell_id and created_at timestamp.
+    Anyone can request cell content using cell_id and created_at timestamp.
     """
-    @student_required
     async def post(self):
-        user_info = get_current_user_info(self)
-        student_id = user_info['user_id']
+        machine_id = get_machine_id(self)
 
         data = self.get_json()
         cell_id = data.get("cell_id")
@@ -395,12 +372,12 @@ class RequestCellSyncHashHandler(JsonAPIHandler):
             "cell_id": cell_id,
             "content": cell_data["content"],
             "created_at": cell_data["created_at"],
-            "student_id": student_id
+            "machine_id": machine_id,
+            "role": get_current_role()
         }))
 
 
 class NetworkInfoHandler(JsonAPIHandler):
-    # Remove @teacher_required decorator - no auth check needed for network info
     async def get(self):
         try:
             ip_addresses = _get_private_ipv4_addresses()
@@ -414,19 +391,103 @@ class NetworkInfoHandler(JsonAPIHandler):
                 except Exception:
                     pass
                 ip_addresses = list(dict.fromkeys(fallback_host + ["127.0.0.1"]))
+
+            # Test Redis connectivity for network validation
+            redis_accessible = False
+            try:
+                await redis_manager.client.ping()
+                redis_accessible = True
+            except:
+                pass
+
             payload = {
                 "type": "network_info",
                 "hostname": hostname,
-                "ip_addresses": ip_addresses
+                "ip_addresses": ip_addresses,
+                "redis": {
+                    "port": 6379,
+                    "accessible": redis_accessible,
+                    "docker": True,
+                    "url": f"redis://{ip_addresses[0] if ip_addresses else 'localhost'}:6379"
+                },
+                "role": get_current_role(),
+                "jupyter_port": 8888,
+                "instructions": {
+                    "for_students": f"Set REDIS_URL=redis://{ip_addresses[0] if ip_addresses else 'TEACHER_IP'}:6379"
+                },
+                "requested_by": get_machine_id(self)
             }
             self.finish(json.dumps(payload))
         except Exception as e:
-            logger.error(f"Failed to gather network info: {e}")
+            logger.error(f"Network info error: {e}")
             self.set_status(500)
             self.finish(json.dumps({
                 "type": "network_info",
                 "hostname": socket.gethostname(),
-                "ip_addresses": []
+                "ip_addresses": [],
+                "error": str(e)
+            }))
+
+
+class DockerRedisHandler(JsonAPIHandler):
+    """Handler for Docker Redis management and testing"""
+
+    async def get(self):
+        """Get Docker Redis status and connection info"""
+        try:
+            info = await redis_manager.client.info()
+
+            payload = {
+                "docker_redis": {
+                    "connected": True,
+                    "version": info.get('redis_version'),
+                    "uptime": info.get('uptime_in_seconds'),
+                    "memory_usage": info.get('used_memory_human'),
+                    "total_connections": info.get('total_connections_received'),
+                    "url": redis_manager.redis_url
+                },
+                "network_ready": True,
+                "requested_by": get_machine_id(self)
+            }
+            self.finish(json.dumps(payload))
+
+        except Exception as e:
+            payload = {
+                "docker_redis": {
+                    "connected": False,
+                    "error": str(e),
+                    "url": redis_manager.redis_url
+                },
+                "network_ready": False,
+                "requested_by": get_machine_id(self)
+            }
+            self.set_status(503)
+            self.finish(json.dumps(payload))
+
+    async def post(self):
+        """Test Redis connection with custom URL"""
+        data = self.get_json()
+        test_url = data.get('redis_url', redis_manager.redis_url)
+
+        try:
+            import redis
+            test_client = redis.from_url(test_url, socket_connect_timeout=3)
+            await test_client.ping()
+            await test_client.close()
+
+            self.finish(json.dumps({
+                "connected": True,
+                "url": test_url,
+                "message": "Redis connection successful",
+                "tested_by": get_machine_id(self)
+            }))
+
+        except Exception as e:
+            self.finish(json.dumps({
+                "connected": False,
+                "url": test_url,
+                "error": str(e),
+                "tested_by": get_machine_id(self)
             }))
 
 
@@ -436,25 +497,29 @@ def setup_handlers(web_app):
     api_base = url_path_join(base_url, "notebook-sync")
 
     handlers = [
-        (url_path_join(api_base, "auth", "validate"), AuthValidationHandler),  # GET
-        (url_path_join(api_base, "status"), StatusHandler),
+        # Core status and network endpoints
+        (url_path_join(api_base, "status"), StatusHandler),  # GET - Enhanced Docker Redis status
+        (url_path_join(api_base, "docker", "redis"), DockerRedisHandler),  # GET/POST - Docker Redis management
+        (url_path_join(api_base, "network", "info"), NetworkInfoHandler),  # GET - Network discovery with Docker info
+
+        # Session management endpoints (all open access)
         (url_path_join(api_base, "sessions"), SessionCreateHandler),  # POST
         (url_path_join(api_base, "sessions", r"(?P<code>[A-Z0-9]+)", "join"), SessionJoinHandler),  # POST
         (url_path_join(api_base, "sessions", r"(?P<code>[A-Z0-9]+)"), SessionEndHandler),  # DELETE
         (url_path_join(api_base, "sessions", r"(?P<code>[A-Z0-9]+)", "status"), SessionValidateHandler),  # GET
+
+        # Cell synchronization endpoints (all open access)
         (url_path_join(api_base, "sessions", r"(?P<code>[A-Z0-9]+)", "cells", r"(?P<cell_id>[^/]+)", "push"), PushCellHandler),  # POST
         (url_path_join(api_base, "sessions", r"(?P<code>[A-Z0-9]+)", "cells", r"(?P<cell_id>[^/]+)", "toggle"), ToggleSyncHandler),  # POST
         (url_path_join(api_base, "sessions", r"(?P<code>[A-Z0-9]+)", "notifications"), NotificationsHandler),  # GET
         (url_path_join(api_base, "sessions", r"(?P<code>[A-Z0-9]+)", "cells", r"(?P<cell_id>[^/]+)", "pending"), PendingCellHandler),  # GET
         (url_path_join(api_base, "sessions", r"(?P<code>[A-Z0-9]+)", "cells", r"(?P<cell_id>[^/]+)", "request-sync"), RequestSyncHandler),  # POST
-        
-        # New hash-based handlers (new specification)
+
+        # Hash-based synchronization endpoints (all open access)
         (url_path_join(api_base, "hash", "push-cell"), PushCellHashHandler),  # POST
         (url_path_join(api_base, "hash", "request-sync"), RequestCellSyncHashHandler),  # POST
-        # Read APIs for listing and previewing by hash
         (url_path_join(api_base, "hash", "keys"), HashKeysListHandler),  # GET
         (url_path_join(api_base, "hash", "key", r"(?P<hash_key>[a-f0-9]{64})"), HashKeyContentHandler),  # GET
-        (url_path_join(api_base, "network", "info"), NetworkInfoHandler),  # GET (teacher only)
     ]
     web_app.add_handlers(host_pattern, handlers)
     logger.info("Notebook Sync REST handlers registered at %s", api_base)

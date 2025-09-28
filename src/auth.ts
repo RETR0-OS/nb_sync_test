@@ -1,52 +1,38 @@
-import { requestAPI } from './handler';
-
 /**
  * User role type
  */
 export type UserRole = 'teacher' | 'student';
 
 /**
- * Authentication response interface
+ * Simple role determination based on URL parameters and environment
  */
-export interface IAuthResponse {
-  authenticated: boolean;
-  role?: UserRole;
-  user_id?: string;
-  message?: string;
-}
-
-/**
- * Session info interface
- */
-export interface ISessionInfo {
-  user_id: string;
-  role: UserRole;
-  session_valid: boolean;
-}
-
-// Optional addition:
-export type AuthListener = (info: ISessionInfo | null) => void;
-
-/**
- * Authentication service for Jupyter session validation and role management
- */
-export class AuthService {
-  static async validateSession(): Promise<IAuthResponse> {
-    try {
-      // Attempt backend role lookup (adjust endpoint as needed)
-      const data = await requestAPI<any>('auth/validate');
-      console.log('AuthService.validateSession response:', data);
-      if (data?.authenticated && (data.role === 'teacher' || data.role === 'student')) {
-        return { authenticated: true, role: data.role };
-      }
-      return { authenticated: false, message: data?.message || 'Unauthenticated' };
-    } catch (err) {
-      console.warn('AuthService.validateSession error (proceeding without backend auth):', err);
-      // Graceful fallback: return unauthenticated but don't block functionality
-      return { 
-        authenticated: false, 
-        message: 'Backend authentication unavailable - proceeding with limited functionality.' 
-      };
-    }
+export function determineUserRole(): UserRole {
+  // Check URL parameter first (for easy teacher mode testing)
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('teacher') === 'true' || urlParams.get('role') === 'teacher') {
+    return 'teacher';
   }
+
+  // Check localStorage for persistence
+  const savedRole = localStorage.getItem('nb_sync_role');
+  if (savedRole === 'teacher') {
+    return 'teacher';
+  }
+
+  // Default to student
+  return 'student';
+}
+
+/**
+ * Set user role and persist to localStorage
+ */
+export function setUserRole(role: UserRole): void {
+  localStorage.setItem('nb_sync_role', role);
+}
+
+/**
+ * Clear stored role
+ */
+export function clearUserRole(): void {
+  localStorage.removeItem('nb_sync_role');
 }

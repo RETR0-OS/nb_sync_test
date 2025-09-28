@@ -77,46 +77,21 @@ class SessionService:
             "timestamp": upd["timestamp"],
         }
 
-    async def verify_session_owner(self, code: str, teacher_id: str) -> bool:
-        """Verify that the teacher owns this session."""
-        try:
-            session = await redis_manager.get_session(code)
-            if not session:
-                return False
-            return session.get("teacher_id") == teacher_id
-        except Exception as e:
-            logger.error(f"Error verifying session owner: {e}")
-            return False
 
-    async def verify_user_in_session(self, code: str, user_id: str) -> bool:
-        """Verify that the user is part of this session (either teacher or student)."""
-        try:
-            session = await redis_manager.get_session(code)
-            if not session:
-                return False
-
-            # Check if user is the teacher
-            if session.get("teacher_id") == user_id:
-                return True
-
-            # Check if user is in students list
-            students = session.get("students", [])
-            if isinstance(students, str):
-                try:
-                    students = json.loads(students)
-                except json.JSONDecodeError:
-                    students = []
-
-            return user_id in students
-
-        except Exception as e:
-            logger.error(f"Error verifying user in session: {e}")
-            return False
-
-    # Optional enhancement:
     async def session_exists(self, code: str) -> bool:
         sess = await redis_manager.get_session(code)
         return bool(sess and sess["status"] == "active")
+
+    async def get_session_status(self, code: str) -> Optional[Dict[str, Any]]:
+        """Get session status information."""
+        session = await redis_manager.get_session(code)
+        if not session:
+            return None
+        return {
+            "status": session.get("status", "unknown"),
+            "teacher_id": session.get("teacher_id", "unknown"),
+            "students": session.get("students", [])
+        }
 
     # Hash-based cell operations (new specification)
     

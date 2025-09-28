@@ -189,3 +189,45 @@ export async function listNotifications(code: string, since: number): Promise<an
 export async function fetchNetworkInfo(): Promise<INetworkInfoResponse> {
   return requestAPI<INetworkInfoResponse>('network/info', { method: 'GET' });
 }
+
+/**
+ * Docker Redis testing and management functions
+ */
+export interface DockerRedisResponse {
+  docker_redis: {
+    connected: boolean;
+    version?: string;
+    uptime?: number;
+    memory_usage?: string;
+    total_connections?: number;
+    url: string;
+    error?: string;
+  };
+  network_ready: boolean;
+  requested_by?: string;
+}
+
+export interface RedisTestResponse {
+  connected: boolean;
+  url: string;
+  message?: string;
+  error?: string;
+  tested_by?: string;
+}
+
+/**
+ * Get Docker Redis status and connection info
+ */
+export async function getDockerRedisStatus(): Promise<DockerRedisResponse> {
+  return requestAPI<DockerRedisResponse>('docker/redis', { method: 'GET' });
+}
+
+/**
+ * Test Redis connection with custom URL
+ */
+export async function testRedisConnection(redisUrl?: string): Promise<RedisTestResponse> {
+  return requestAPI<RedisTestResponse>('docker/redis', {
+    method: 'POST',
+    body: JSON.stringify({ redis_url: redisUrl })
+  });
+}
