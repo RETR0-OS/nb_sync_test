@@ -23,9 +23,101 @@ const MOCK_CELL_IDS = [
 ];
 
 /**
+ * Mock code snippets mapped to cell IDs
+ */
+const MOCK_CODE_SNIPPETS: { [key: string]: string } = {
+  '0955501c-5637-4204-9ba5-a157055f6da8': `print("Hello World!")
+for i in range(5):
+    print(f"Count: {i}")`,
+
+  '88e7db2a-8c6f-4b6f-b1a9-6d73904cf32a': `import pandas as pd
+import numpy as np
+
+df = pd.read_csv("data.csv")
+print(df.head())`,
+
+  'a1d2229d-76af-487d-95f2-93ba04a4544c': `import matplotlib.pyplot as plt
+
+x = [1, 2, 3, 4, 5]
+y = [2, 4, 6, 8, 10]
+plt.plot(x, y)
+plt.show()`,
+
+  'eedf1709-269e-4230-accf-9baa9c0476c4': `def fibonacci(n):
+    if n <= 1:
+        return n
+    return fibonacci(n-1) + fibonacci(n-2)
+
+print(fibonacci(10))`,
+
+  '2e91cbd4-c7eb-4a52-b229-44a6571a543f': `import requests
+import json
+
+response = requests.get("https://api.example.com/data")
+data = response.json()
+print(data)`,
+
+  '14892b5b-efc8-4f29-a674-3f001b2cd9f4': `class Calculator:
+    def __init__(self):
+        self.result = 0
+
+    def add(self, x):
+        self.result += x
+        return self
+
+calc = Calculator()
+print(calc.add(5).add(3).result)`
+};
+
+/**
+ * Create ghost code preview overlay
+ */
+function createCodePreview(cell: Cell, code: string): HTMLElement {
+  const preview = document.createElement('div');
+  preview.className = 'nb-sync-code-preview';
+
+  const preElement = document.createElement('pre');
+  preElement.textContent = code;
+  preview.appendChild(preElement);
+
+  // Target the CodeMirror editor area specifically for better positioning
+  const editorArea = cell.node.querySelector('.cm-editor') ||
+                    cell.node.querySelector('.CodeMirror') ||
+                    cell.node.querySelector('.jp-InputArea-editor');
+
+  if (editorArea) {
+    // Position relative to the editor area
+    editorArea.appendChild(preview);
+  } else {
+    // Fallback to input area
+    const inputArea = cell.node.querySelector('.jp-Cell-inputArea');
+    if (inputArea) {
+      inputArea.appendChild(preview);
+    }
+  }
+
+  return preview;
+}
+
+/**
+ * Replace cell content with new code
+ */
+function replaceCellContent(cell: Cell, newCode: string): void {
+  try {
+    // Use the working method: sharedModel.source
+    if (cell.model && (cell.model as any).sharedModel) {
+      const sharedModel = (cell.model as any).sharedModel;
+      sharedModel.source = newCode;
+    }
+  } catch (error) {
+    console.error('Error replacing cell content:', error);
+  }
+}
+
+/**
  * Create dropdown menu with cell IDs
  */
-function createCellIdDropdown(buttonElement: HTMLElement): HTMLElement {
+function createCellIdDropdown(buttonElement: HTMLElement, currentCell: Cell): HTMLElement {
   const dropdown = document.createElement('div');
   dropdown.className = 'nb-sync-dropdown';
 
@@ -36,11 +128,46 @@ function createCellIdDropdown(buttonElement: HTMLElement): HTMLElement {
     const option = document.createElement('div');
     option.className = 'nb-sync-dropdown-option';
     option.textContent = cellId;
+
+    let previewElement: HTMLElement | null = null;
+
+    // Add hover to show preview
+    option.addEventListener('mouseenter', () => {
+      // TODO: Replace with actual fetch request to backend
+      // const code = await fetchCodeFromBackend(cellId);
+
+      const code = MOCK_CODE_SNIPPETS[cellId] || '# No code available';
+      previewElement = createCodePreview(currentCell, code);
+    });
+
+    // Remove preview on mouse leave
+    option.addEventListener('mouseleave', () => {
+      if (previewElement) {
+        previewElement.remove();
+        previewElement = null;
+      }
+    });
+
+    // Click to replace cell content
     option.addEventListener('click', (e) => {
       e.stopPropagation();
-      console.log('Selected cell ID:', cellId);
+
+      // Remove any existing preview
+      if (previewElement) {
+        previewElement.remove();
+        previewElement = null;
+      }
+
+      // TODO: Replace with actual fetch request to backend
+      // const code = await fetchCodeFromBackend(cellId);
+
+      const code = MOCK_CODE_SNIPPETS[cellId] || '# No code available';
+      replaceCellContent(currentCell, code);
+
+      console.log('Replaced cell content with code from:', cellId);
       dropdown.remove();
     });
+
     dropdownContent.appendChild(option);
   });
 
@@ -71,7 +198,7 @@ function createCellIdDropdown(buttonElement: HTMLElement): HTMLElement {
 /**
  * Create a sync button widget
  */
-function createSyncButton(): Widget {
+function createSyncButton(cell: Cell): Widget {
   const button = new Widget({ node: document.createElement('button') });
   button.node.className = 'nb-sync-button';
   button.node.textContent = 'Sync';
@@ -92,7 +219,7 @@ function createSyncButton(): Widget {
     // const cellIds = await fetchCellIdsFromBackend();
 
     // Create and show dropdown with mock data
-    const dropdown = createCellIdDropdown(button.node);
+    const dropdown = createCellIdDropdown(button.node, cell);
     document.body.appendChild(dropdown);
   });
 
@@ -104,7 +231,7 @@ function createSyncButton(): Widget {
  */
 function addSyncButtonToCell(cell: Cell): void {
   if (!cell.node.querySelector('.nb-sync-button')) {
-    const syncButton = createSyncButton();
+    const syncButton = createSyncButton(cell);
 
     // Create a container for the button positioned in top-right
     const buttonContainer = document.createElement('div');
