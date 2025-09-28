@@ -600,7 +600,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
         });
     }
 
-    requestAPI<any>('get-example')
+    requestAPI<any>('notebook-sync')
       .then(data => {
         console.log(data);
       })
