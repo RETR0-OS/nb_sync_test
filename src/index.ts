@@ -22,23 +22,79 @@ const MOCK_CELL_IDS = [
   '14892b5b-efc8-4f29-a674-3f001b2cd9f4'
 ];
 
+type RawCell = {
+  cellId: string;
+  timestamp: string;
+}
+
+async function getRawCellData (cell: Cell) : Promise<Array<RawCell>> {
+  try {
+      // 1. Call backend API (replace with your endpoint) ///////////// To do put correct endpoint to fetch raw data
+      const response = await fetch('http://localhost:5000/getRawCellData', {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cellid: cell.model.id })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      // 2. Parse backend response
+      const initialRawCellData : Array<RawCell> = await response.json();
+
+      return initialRawCellData;  // `output` is whatever field your backend sends
+
+    } catch (err) {
+      console.error('Sync failed:', err);
+      alert('Sync failed. Check console for details.');
+    } 
+    return [];
+}
+
+async function getCode (cellId: string, timestamp: string) : Promise<string> {
+  try {
+      // 1. Call backend API (replace with your endpoint)
+      const response = await fetch('http://localhost:5000/getCode', {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cellid: cellId, timestamp: timestamp })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      // 2. Parse backend response
+      const code : string = await response.json();
+
+      return code;  // `output` is whatever field your backend sends
+
+    } catch (err) {
+      console.error('Sync failed:', err);
+      alert('Sync failed. Check console for details.');
+    } 
+    return "";
+}
+
 /**
  * Create dropdown menu with cell IDs
  */
-function createCellIdDropdown(buttonElement: HTMLElement): HTMLElement {
+function createCellIdDropdown(buttonElement: HTMLElement, initialRawCellData: Array<RawCell>, cell : Cell): HTMLElement {
   const dropdown = document.createElement('div');
   dropdown.className = 'nb-sync-dropdown';
 
   const dropdownContent = document.createElement('div');
   dropdownContent.className = 'nb-sync-dropdown-content';
 
-  MOCK_CELL_IDS.forEach(cellId => {
+  initialRawCellData.forEach(cellData => {
     const option = document.createElement('div');
     option.className = 'nb-sync-dropdown-option';
-    option.textContent = cellId;
-    option.addEventListener('click', (e) => {
+    option.textContent = cellData.timestamp;
+    option.addEventListener('click', async (e) => {
       e.stopPropagation();
-      console.log('Selected cell ID:', cellId);
+      const code : string = await getCode(cellData.cellId, cellData.timestamp)
+      cell.model.sharedModel.setSource(code);
       dropdown.remove();
     });
     dropdownContent.appendChild(option);
@@ -68,17 +124,18 @@ function createCellIdDropdown(buttonElement: HTMLElement): HTMLElement {
   return dropdown;
 }
 
+
 /**
  * Create a sync button widget
  */
-function createSyncButton(): Widget {
+function createSyncButton(cell: Cell): Widget {
   const button = new Widget({ node: document.createElement('button') });
   button.node.className = 'nb-sync-button';
   button.node.textContent = 'Sync';
   button.node.title = 'Sync this cell';
 
   // Add click handler to show dropdown with cell IDs
-  button.node.addEventListener('click', (e) => {
+  button.node.addEventListener('click', async (e) => {
     e.stopPropagation();
 
     // Remove any existing dropdown
@@ -88,11 +145,11 @@ function createSyncButton(): Widget {
       return;
     }
 
-    // TODO: Replace with actual fetch request to backend
-    // const cellIds = await fetchCellIdsFromBackend();
+    // TODO: Replace with actual fetch request to backend : Harmit
+    const initialRawCellData = await getRawCellData(cell);
 
     // Create and show dropdown with mock data
-    const dropdown = createCellIdDropdown(button.node);
+    const dropdown = await createCellIdDropdown(button.node, initialRawCellData, cell);
     document.body.appendChild(dropdown);
   });
 
@@ -104,7 +161,7 @@ function createSyncButton(): Widget {
  */
 function addSyncButtonToCell(cell: Cell): void {
   if (!cell.node.querySelector('.nb-sync-button')) {
-    const syncButton = createSyncButton();
+    const syncButton = createSyncButton(cell);
 
     // Create a container for the button positioned in top-right
     const buttonContainer = document.createElement('div');
