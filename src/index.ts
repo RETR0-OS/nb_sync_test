@@ -8,8 +8,9 @@ import { INotebookTracker } from '@jupyterlab/notebook';
 import { Cell } from '@jupyterlab/cells';
 import { Widget } from '@lumino/widgets';
 
-import { requestAPI, listHashKeys, getCellByHash, pushCellByHash } from './handler';
+import { requestAPI, listHashKeys, getCellByHash, pushCellByHash, createSession } from './handler';
 import { AuthService, UserRole } from './auth';
+import { fetchNetworkInfo } from './handler';
 
 /**
  * User role storage (now managed by authService)
@@ -232,7 +233,8 @@ async function initializeAuthentication(): Promise<void> {
 
       if (!sessionReady) {
         if (currentUserRole === 'teacher') {
-          showTeacherSessionSetupModal();
+          // Auto-create session (no manual prompts)
+          await autoCreateTeacherSessionAndShare();
         } else if (currentUserRole === 'student') {
           showStudentSessionSetupModal();
         }
@@ -653,24 +655,6 @@ function addSyncButtonToCell(cell: Cell): void {
 }
 
 /**
- * Show teacher session setup modal
- */
-function showTeacherSessionSetupModal(): void {
-  let code = window.prompt('Enter a session code (leave blank to auto-generate):', '') || '';
-  if (!code.trim()) {
-    code = 'S' + Math.random().toString(36).slice(2, 8).toUpperCase();
-    alert(`Generated session code: ${code}`);
-  }
-  const ip = window.prompt('Optional: Enter teacher Redis IP (blank = default):', '') || '';
-  sessionCode = code.trim();
-  teacherIp = ip.trim() || null;
-  sessionReady = true;
-  saveSessionState();
-  console.log('Teacher session initialized:', { sessionCode, teacherIp });
-  addSyncButtonsToAllCells(); // now that session is ready
-}
-
-/**
  * Show student session setup modal
  */
 function showStudentSessionSetupModal(): void {
@@ -687,6 +671,239 @@ function showStudentSessionSetupModal(): void {
   saveSessionState();
   console.log('Student joined session:', { sessionCode, teacherIp });
   addSyncButtonsToAllCells();
+}
+
+/**
+ * Create and show teacher share modal (session code + IP list)
+ */
+function showTeacherShareModal(sessionCode: string, ipAddresses: string[]): void {
+  ensureShareModalStyles();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'nb-sync-share-overlay';
+
+  const dialog = document.createElement('div');
+  dialog.className = 'nb-sync-share-dialog';
+  dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
+
+  const title = document.createElement('h2');
+  title.textContent = 'Share this Session';
+  dialog.appendChild(title);
+
+  const codeLabel = document.createElement('div');
+  codeLabel.className = 'nb-sync-share-label';
+  codeLabel.textContent = 'Session Code';
+  dialog.appendChild(codeLabel);
+
+  const codeBox = document.createElement('div');
+  codeBox.className = 'nb-sync-share-code';
+  codeBox.textContent = sessionCode;
+  dialog.appendChild(codeBox);
+
+  const copyCodeBtn = document.createElement('button');
+  copyCodeBtn.className = 'nb-sync-share-copy-btn';
+  copyCodeBtn.textContent = 'Copy Code';
+  copyCodeBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(sessionCode).catch(() => {});
+    copyCodeBtn.textContent = 'Copied!';
+    setTimeout(() => (copyCodeBtn.textContent = 'Copy Code'), 1500);
+  });
+  dialog.appendChild(copyCodeBtn);
+
+  const ipLabel = document.createElement('div');
+  ipLabel.className = 'nb-sync-share-label';
+  ipLabel.style.marginTop = '14px';
+  ipLabel.textContent = 'Available IP Addresses';
+  dialog.appendChild(ipLabel);
+
+  const ipList = document.createElement('div');
+  ipList.className = 'nb-sync-share-ip-list';
+  ipAddresses.forEach((ip, idx) => {
+    const row = document.createElement('div');
+    row.className = 'nb-sync-share-ip-row';
+
+    const ipSpan = document.createElement('span');
+    ipSpan.textContent = ip;
+    ipSpan.className = 'nb-sync-share-ip';
+    row.appendChild(ipSpan);
+
+    const btn = document.createElement('button');
+    btn.className = 'nb-sync-share-copy-btn small';
+    btn.textContent = 'Copy';
+    btn.addEventListener('click', () => {
+      navigator.clipboard.writeText(ip).catch(() => {});
+      btn.textContent = 'Copied!';
+      setTimeout(() => (btn.textContent = 'Copy'), 1200);
+    });
+    row.appendChild(btn);
+    ipList.appendChild(row);
+    if (idx === 0) {
+      setTimeout(() => btn.focus(), 50);
+    }
+  });
+  dialog.appendChild(ipList);
+
+  const help = document.createElement('p');
+  help.className = 'nb-sync-share-help';
+  help.innerHTML = `Students: Use one of the IPs above when asked for teacher Redis host (or set <code>REDIS_URL=redis://IP:6379</code>) and enter the session code.`;
+  dialog.appendChild(help);
+
+  const close = document.createElement('button');
+  close.className = 'nb-sync-share-close';
+  close.textContent = 'Close';
+  close.addEventListener('click', () => overlay.remove());
+  dialog.appendChild(close);
+
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+}
+
+let shareStylesInjected = false;
+function ensureShareModalStyles(): void {
+  if (shareStylesInjected) return;
+  shareStylesInjected = true;
+  const style = document.createElement('style');
+  style.id = 'nb-sync-share-styles';
+  style.textContent = `
+  .nb-sync-share-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.45);
+    z-index: 10000;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--jp-ui-font-family);
+  }
+  .nb-sync-share-dialog {
+    background: var(--jp-layout-color1, #fff);
+    color: var(--jp-ui-font-color1, #111);
+    padding: 24px 28px;
+    border-radius: 10px;
+    width: 460px;
+    max-width: 90%;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.25);
+    animation: fadeIn .18s ease;
+  }
+  .nb-sync-share-dialog h2 {
+    margin: 0 0 10px;
+    font-size: 1.4em;
+    font-weight: 600;
+  }
+  .nb-sync-share-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    opacity: 0.8;
+    margin-bottom: 4px;
+  }
+  .nb-sync-share-code {
+    font-family: monospace;
+    font-size: 1.9rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    background: #222;
+    color: #fff;
+    padding: 10px 14px;
+    border-radius: 6px;
+    text-align: center;
+    user-select: all;
+  }
+  .nb-sync-share-copy-btn {
+    margin-top: 10px;
+    background: #1976d2;
+    color: #fff;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  .nb-sync-share-copy-btn:hover { background: #1565c0; }
+  .nb-sync-share-copy-btn.small {
+    margin: 0;
+    padding: 4px 10px;
+    font-size: 0.7rem;
+  }
+  .nb-sync-share-ip-list {
+    margin-top: 4px;
+    max-height: 180px;
+    overflow-y: auto;
+    border: 1px solid var(--jp-border-color2,#ccc);
+    border-radius: 6px;
+    padding: 6px 8px;
+    background: var(--jp-layout-color2,#fafafa);
+  }
+  .nb-sync-share-ip-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 2px;
+    font-family: monospace;
+    font-size: 0.9rem;
+  }
+  .nb-sync-share-ip-row + .nb-sync-share-ip-row {
+    border-top: 1px solid rgba(0,0,0,0.08);
+  }
+  .nb-sync-share-help {
+    font-size: 0.72rem;
+    line-height: 1.2rem;
+    margin: 14px 0 4px;
+    opacity: 0.85;
+  }
+  .nb-sync-share-help code {
+    background: #eee;
+    padding: 2px 4px;
+    border-radius: 4px;
+    font-size: 0.65rem;
+  }
+  .nb-sync-share-close {
+    margin-top: 8px;
+    background: #444;
+    color: #fff;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    float: right;
+  }
+  .nb-sync-share-close:hover { background: #222; }
+  @keyframes fadeIn {
+    from { opacity:0; transform: translateY(4px); }
+    to { opacity:1; transform: translateY(0); }
+  }
+  `;
+  document.head.appendChild(style);
+}
+
+/**
+ * Auto-create teacher session and show share modal (no fallback prompts)
+ */
+async function autoCreateTeacherSessionAndShare(): Promise<void> {
+  if (sessionReady) return;
+  try {
+    console.log('Creating teacher session automatically...');
+    const res = await createSession();
+    sessionCode = res.session_code;
+    sessionReady = true;
+    saveSessionState();
+    console.log('Session created:', sessionCode);
+
+    let ipAddresses: string[] = [];
+    try {
+      const netInfo = await fetchNetworkInfo();
+      ipAddresses = netInfo.ip_addresses || [];
+    } catch (e) {
+      console.error('Failed to fetch network info:', e);
+    }
+    if (!ipAddresses.length) {
+      ipAddresses = [window.location.hostname || '127.0.0.1'];
+    }
+    showTeacherShareModal(sessionCode, ipAddresses);
+    addSyncButtonsToAllCells();
+  } catch (e) {
+    console.error('Automatic session creation failed:', e);
+  }
 }
 
 /**

@@ -69,6 +69,12 @@ export interface PushCellHashResponse {
   teacher_id: string;
 }
 
+export interface INetworkInfoResponse {
+  type: 'network_info';
+  hostname: string;
+  ip_addresses: string[];
+}
+
 /**
  * List available hash keys from backend. Supports teacher_ip, cursor, count, match.
  */
@@ -179,4 +185,8 @@ export async function listNotifications(code: string, since: number): Promise<an
   return requestAPI<any>(`sessions/${code}/notifications?${qp.toString()}`, {
     method: 'GET'
   });
+}
+
+export async function fetchNetworkInfo(): Promise<INetworkInfoResponse> {
+  return requestAPI<INetworkInfoResponse>('network/info', { method: 'GET' });
 }

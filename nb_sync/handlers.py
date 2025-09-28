@@ -1,6 +1,7 @@
 # jupyter_notebook_sync/handlers.py
 import json
 import logging
+import socket
 from typing import Any, Dict, Optional
 
 from jupyter_server.base.handlers import APIHandler
@@ -13,6 +14,37 @@ from .session_manager import session_service
 from .role_manager import role_manager
 
 logger = logging.getLogger(__name__)
+
+
+def _get_private_ipv4_addresses() -> list[str]:
+    """Return sorted list of private (RFC1918) IPv4 addresses for this host."""
+    ips = set()
+    try:
+        hostname = socket.gethostname()
+        # gethostbyname_ex
+        try:
+            for ip in socket.gethostbyname_ex(hostname)[2]:
+                ips.add(ip)
+        except Exception:
+            pass
+        # getaddrinfo
+        try:
+            for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+                ip = info[4][0]
+                ips.add(ip)
+        except Exception:
+            pass
+        # Filter to private ranges
+        def is_private(ip: str) -> bool:
+            return (
+                ip.startswith("10.")
+                or ip.startswith("192.168.")
+                or (ip.startswith("172.") and 16 <= int(ip.split(".")[1]) <= 31)
+            )
+        private_ips = sorted(ip for ip in ips if is_private(ip))
+        return private_ips
+    except Exception:
+        return []
 
 
 class JsonAPIHandler(APIHandler):
@@ -366,6 +398,37 @@ class RequestCellSyncHashHandler(JsonAPIHandler):
         }))
 
 
+class NetworkInfoHandler(JsonAPIHandler):
+    @teacher_required
+    async def get(self):
+        try:
+            ip_addresses = _get_private_ipv4_addresses()
+            hostname = socket.gethostname()
+            if not ip_addresses:
+                # Guarantee at least localhost + current hostname resolution for safety
+                fallback_host = []
+                try:
+                    host_ip = socket.gethostbyname(hostname)
+                    fallback_host.append(host_ip)
+                except Exception:
+                    pass
+                ip_addresses = list(dict.fromkeys(fallback_host + ["127.0.0.1"]))
+            payload = {
+                "type": "network_info",
+                "hostname": hostname,
+                "ip_addresses": ip_addresses
+            }
+            self.finish(json.dumps(payload))
+        except Exception as e:
+            logger.error(f"Failed to gather network info: {e}")
+            self.set_status(500)
+            self.finish(json.dumps({
+                "type": "network_info",
+                "hostname": socket.gethostname(),
+                "ip_addresses": []
+            }))
+
+
 def setup_handlers(web_app):
     host_pattern = ".*$"
     base_url = web_app.settings["base_url"]
@@ -390,6 +453,7 @@ def setup_handlers(web_app):
         # Read APIs for listing and previewing by hash
         (url_path_join(api_base, "hash", "keys"), HashKeysListHandler),  # GET
         (url_path_join(api_base, "hash", "key", r"(?P<hash_key>[a-f0-9]{64})"), HashKeyContentHandler),  # GET
+        (url_path_join(api_base, "network", "info"), NetworkInfoHandler),  # GET (teacher only)
     ]
     web_app.add_handlers(host_pattern, handlers)
     logger.info("Notebook Sync REST handlers registered at %s", api_base)
