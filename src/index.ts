@@ -12,6 +12,10 @@ import { requestAPI, listHashKeys, getCellByHash, pushCellByHash, createSession 
 import { AuthService, UserRole } from './auth';
 import { fetchNetworkInfo } from './handler';
 
+import { Chart, registerables } from 'chart.js';
+Chart.register(...registerables);
+
+
 /**
  * User role storage (now managed by authService)
  */
@@ -654,6 +658,86 @@ function addSyncButtonToCell(cell: Cell): void {
   }
 }
 
+function addButtonToNotebook(notebookTracker: INotebookTracker) {
+  notebookTracker.widgetAdded.connect((_sender, notebookPanel) => {
+    notebookPanel.revealed.then(() => {
+      const button = document.createElement('div');
+      button.className = 'nb-sync-panel-button';
+      button.textContent = 'Stats';
+
+      button.onclick = () => {
+        console.log('Chart button clicked!');
+
+          // If chart already exists, just toggle visibility
+          let chartContainer = notebookPanel.node.querySelector('.nb-sync-chart-container') as HTMLElement;
+          if (chartContainer) {
+            chartContainer.style.display =
+              chartContainer.style.display === 'none' ? 'block' : 'none';
+            return;
+          }
+
+          // Create chart container
+          chartContainer = document.createElement('div');
+          chartContainer.className = 'nb-sync-chart-container';
+
+          const canvas = document.createElement('canvas');
+          chartContainer.appendChild(canvas);
+          notebookPanel.node.appendChild(chartContainer);
+          document.addEventListener('click', (event) => {
+          if (
+              chartContainer &&
+              !chartContainer.contains(event.target as Node) &&
+              event.target !== button
+            ) {
+              chartContainer.remove();
+            }
+          })
+          const syncedCells = notebookPanel.node.querySelectorAll('.nb-sync-synced').length;
+          const totalCodeCells = notebookPanel.node.querySelectorAll('.jp-CodeCell').length;
+          const unsyncedCells = totalCodeCells - syncedCells;
+          // Use Chart.js
+          // @ts-ignore (if TS complains about Chart)
+          new Chart(canvas.getContext('2d'), {
+            type: 'pie',
+            data: {
+              labels: ['Synced', 'Unsynced'],
+              datasets: [{
+                label: 'Sync Status',
+                data: [syncedCells, unsyncedCells], // 🔥 replace with real synced/unsynced count later
+                backgroundColor: ['#4caf50', '#006effff']
+              }]
+            },
+            options: {
+              responsive: true,
+              plugins: {
+                legend: { position: 'bottom' }
+              }
+            }
+          });
+      };
+
+      notebookPanel.node.appendChild(button);
+    });
+  });
+
+  // Handle already open notebooks
+  notebookTracker.forEach(notebookPanel => {
+    notebookPanel.revealed.then(() => {
+      const button = document.createElement('div');
+      button.className = 'nb-sync-panel-button';
+      button.textContent = 'Test Button';
+
+      button.onclick = () => {
+        console.log('Button clicked inside notebook panel!');
+        alert('Button works in notebook panel!');
+      };
+
+      notebookPanel.node.appendChild(button);
+    });
+  });
+}
+
+
 /**
  * Show student session setup modal
  */
@@ -923,6 +1007,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
     console.log('JupyterLab extension nb_sync is activated!');
 
     // Update the addSyncButtonsToAllCells function first
+    addButtonToNotebook(notebookTracker);
     addSyncButtonsToAllCells = () => {
       if (!sessionReady) {
         console.log('Session not ready, skipping sync button injection.');
