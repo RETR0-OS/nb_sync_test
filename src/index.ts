@@ -27,6 +27,8 @@ type RawCell = {
   timestamp: string;
 }
 
+
+///Function for student side
 async function getRawCellData (cell: Cell) : Promise<Array<RawCell>> {
   try {
       // 1. Call backend API (replace with your endpoint) ///////////// To do put correct endpoint to fetch raw data
@@ -75,6 +77,45 @@ async function getCode (cellId: string, timestamp: string) : Promise<string> {
       alert('Sync failed. Check console for details.');
     } 
     return "";
+}
+
+
+//////Functions for teacher sides
+
+async function toggleCell (cellId : string, timestamp: string) : Promise<void> {
+  try {
+      const response = await fetch('http://localhost:5000/toggleCell', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cellid: cellId, timestamp: timestamp })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+    } catch (err) {
+      console.error('Sync failed:', err);
+      alert('Sync failed. Check console for details.');
+    }
+}
+
+async function uploadCode (cellId : string, timestamp: string, cell: Cell) : Promise<void> {
+  try {
+      const response = await fetch('http://localhost:5000/uploadCode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cellid: cellId, timestamp: timestamp, code: cell.model.sharedModel.getSource()})
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+    } catch (err) {
+      console.error('Sync failed:', err);
+      alert('Sync failed. Check console for details.');
+    }
 }
 
 /**
