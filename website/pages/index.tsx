@@ -1,4 +1,5 @@
 import Head from 'next/head'
+import Image from 'next/image'
 import { motion } from 'framer-motion'
 import Hero from '../components/Hero'
 import Features from '../components/Features'
@@ -44,8 +45,14 @@ export default function Home() {
                 whileHover={{ scale: 1.05 }}
                 className="flex items-center gap-3"
               >
-                <div className="w-8 h-8 bg-gradient-to-br from-primary-600 to-stream-500 rounded-lg flex items-center justify-center">
-                  <span className="text-white font-bold text-sm">CS</span>
+                <div className="w-8 h-8 rounded-lg overflow-hidden">
+                  <Image
+                    src="/logo.png"
+                    alt="CodeStream Logo"
+                    width={32}
+                    height={32}
+                    className="w-full h-full object-contain"
+                  />
                 </div>
                 <span className="text-xl font-bold gradient-text">CodeStream</span>
               </motion.div>
@@ -112,8 +119,14 @@ export default function Home() {
               {/* Logo & Description */}
               <div className="md:col-span-2">
                 <div className="flex items-center gap-3 mb-4">
-                  <div className="w-8 h-8 bg-gradient-to-br from-primary-600 to-stream-500 rounded-lg flex items-center justify-center">
-                    <span className="text-white font-bold text-sm">CS</span>
+                  <div className="w-8 h-8 rounded-lg overflow-hidden">
+                    <Image
+                      src="/logo.png"
+                      alt="CodeStream Logo"
+                      width={32}
+                      height={32}
+                      className="w-full h-full object-contain"
+                    />
                   </div>
                   <span className="text-xl font-bold">CodeStream</span>
                 </div>
