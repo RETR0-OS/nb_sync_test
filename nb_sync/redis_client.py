@@ -46,11 +46,10 @@ class RedisManager:
     # session_updates:{code} -> zset (member=cell_id score=timestamp)
     # pending_update:{code}:{cell_id} -> hash { content(json), metadata(json), timestamp, status }
 
-    # async def create_session(self, code: str, teacher_id: str) -> None:
-    async def create_session(self, code: str) -> None:
+    async def create_session(self, code: str, teacher_id: str = None) -> None:
         key = f"session:{code}"
         data = {
-            # "teacher_id": teacher_id,
+            "teacher_id": teacher_id or "unknown",
             "created_at": str(_now()),
             "status": "active",
             "students": json.dumps([]),
@@ -63,7 +62,7 @@ class RedisManager:
         if not h:
             return None
         return {
-            # "teacher_id": h.get("teacher_id"),
+            "teacher_id": h.get("teacher_id"),
             "created_at": float(h.get("created_at", "0")),
             "status": h.get("status", "ended"),
             "students": json.loads(h.get("students", "[]")),

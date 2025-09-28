@@ -6,6 +6,7 @@ from jupyter_server.extension.application import ExtensionApp
 
 from .handlers import setup_handlers
 from .redis_client import redis_manager
+from .role_manager import role_manager
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -30,12 +31,15 @@ def _jupyter_server_extension_points():
 
 
 async def _initialize_redis():
-    """Initialize Redis connection."""
+    """Initialize Redis connection and role manager."""
     try:
         await redis_manager.initialize()
         logger.info("Redis connection initialized successfully")
+
+        await role_manager.initialize()
+        logger.info("Role manager initialized successfully")
     except Exception as e:
-        logger.error(f"Failed to initialize Redis: {e}")
+        logger.error(f"Failed to initialize Redis or role manager: {e}")
         raise
 
 

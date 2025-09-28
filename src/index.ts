@@ -9,11 +9,12 @@ import { Cell } from '@jupyterlab/cells';
 import { Widget } from '@lumino/widgets';
 
 import { requestAPI } from './handler';
+import { authService, UserRole } from './auth';
 
 /**
- * User role storage
+ * User role storage (now managed by authService)
  */
-let currentUserRole: 'teacher' | 'student' | null = null;
+let currentUserRole: UserRole | null = null;
 
 /**
  * Teacher sync toggle state
@@ -51,9 +52,9 @@ function addTimestampToCell(cell: Cell): void {
 }
 
 /**
- * Create role selection dialog
+ * Create authentication error dialog
  */
-function createRoleSelectionDialog(): void {
+function createAuthErrorDialog(errorMessage: string): void {
   // Create overlay
   const overlay = document.createElement('div');
   overlay.className = 'nb-sync-role-overlay';
@@ -64,37 +65,40 @@ function createRoleSelectionDialog(): void {
 
   // Create title
   const title = document.createElement('h2');
-  title.textContent = 'Choose Your Role';
+  title.textContent = 'Authentication Required';
   title.className = 'nb-sync-role-title';
 
-  // Create subtitle
-  const subtitle = document.createElement('p');
-  subtitle.textContent = 'Select how you want to use NB Sync in this session:';
-  subtitle.className = 'nb-sync-role-subtitle';
+  // Create error message
+  const errorPara = document.createElement('p');
+  errorPara.textContent = errorMessage;
+  errorPara.className = 'nb-sync-role-subtitle';
+  errorPara.style.color = '#d32f2f';
 
-  // Create teacher button
-  const teacherButton = document.createElement('button');
-  teacherButton.textContent = '👨‍🏫 Teacher';
-  teacherButton.className = 'nb-sync-role-button nb-sync-teacher-button';
-  teacherButton.addEventListener('click', () => {
-    setUserRole('teacher');
+  // Create retry button
+  const retryButton = document.createElement('button');
+  retryButton.textContent = '🔄 Retry Authentication';
+  retryButton.className = 'nb-sync-role-button nb-sync-teacher-button';
+  retryButton.addEventListener('click', async () => {
     overlay.remove();
+    await initializeAuthentication();
   });
 
-  // Create student button
-  const studentButton = document.createElement('button');
-  studentButton.textContent = '👨‍🎓 Student';
-  studentButton.className = 'nb-sync-role-button nb-sync-student-button';
-  studentButton.addEventListener('click', () => {
-    setUserRole('student');
-    overlay.remove();
-  });
+  // Create info about role configuration
+  const infoPara = document.createElement('p');
+  infoPara.innerHTML = `
+    <strong>Note:</strong> User roles are configured via environment variables:<br>
+    • Set <code>JUPYTER_TEACHER_MODE=true</code> to enable teacher mode<br>
+    • Or add user to <code>JUPYTER_TEACHER_USERS</code> list
+  `;
+  infoPara.className = 'nb-sync-role-subtitle';
+  infoPara.style.fontSize = '0.9em';
+  infoPara.style.color = '#666';
 
   // Assemble dialog
   dialog.appendChild(title);
-  dialog.appendChild(subtitle);
-  dialog.appendChild(teacherButton);
-  dialog.appendChild(studentButton);
+  dialog.appendChild(errorPara);
+  dialog.appendChild(retryButton);
+  dialog.appendChild(infoPara);
 
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
@@ -102,13 +106,14 @@ function createRoleSelectionDialog(): void {
 
 /**
  * Set user role and initialize appropriate features
+ * Now uses authenticated backend role instead of localStorage
  */
-function setUserRole(role: 'teacher' | 'student'): void {
+async function setUserRole(role: UserRole): Promise<void> {
   currentUserRole = role;
   console.log(`User role set to: ${role}`);
 
-  // Store role in localStorage for persistence
-  localStorage.setItem('nb-sync-role', role);
+  // No longer store in localStorage - role comes from backend authentication
+  // localStorage.setItem('nb-sync-role', role);
 
   // Initialize features based on role
   if (role === 'student') {
@@ -139,18 +144,47 @@ function initializeTeacherFeatures(): void {
 }
 
 /**
- * Check for stored role preference
+ * Check authentication and get role from backend
  */
-function checkStoredRole(): boolean {
-  const storedRole = localStorage.getItem('nb-sync-role') as 'teacher' | 'student' | null;
-  console.log('Checking stored role:', storedRole);
-  if (storedRole && (storedRole === 'teacher' || storedRole === 'student')) {
-    console.log('Valid stored role found, setting role to:', storedRole);
-    setUserRole(storedRole);
-    return true;
+async function checkAuthenticatedRole(): Promise<boolean> {
+  try {
+    console.log('Checking authentication with backend...');
+    const authResult = await authService.validateSession();
+
+    if (authResult.authenticated && authResult.role) {
+      console.log('Valid authenticated role found:', authResult.role);
+      await setUserRole(authResult.role);
+      return true;
+    } else {
+      console.log('Authentication failed:', authResult.message);
+      return false;
+    }
+  } catch (error) {
+    console.error('Error checking authentication:', error);
+    return false;
   }
-  console.log('No valid stored role found');
-  return false;
+}
+
+/**
+ * Initialize authentication and handle UI setup
+ */
+async function initializeAuthentication(): Promise<void> {
+  try {
+    const isAuthenticated = await checkAuthenticatedRole();
+
+    if (isAuthenticated) {
+      // Authentication successful, UI should already be initialized by setUserRole
+      console.log('Authentication successful, UI initialized');
+    } else {
+      // Authentication failed, show error dialog
+      const errorMessage = 'Could not authenticate with Jupyter session. Please check your session and role configuration.';
+      createAuthErrorDialog(errorMessage);
+    }
+  } catch (error) {
+    console.error('Authentication initialization failed:', error);
+    const errorMessage = `Authentication error: ${error}`;
+    createAuthErrorDialog(errorMessage);
+  }
 }
 
 /**
@@ -550,20 +584,10 @@ const plugin: JupyterFrontEndPlugin<void> = {
     // Setup notebook tracking
     setupNotebookTracking();
 
-    // Check for stored role or show role selection dialog
-    if (!checkStoredRole()) {
-      // Show role selection dialog after a brief delay
-      setTimeout(() => {
-        createRoleSelectionDialog();
-      }, 1000);
-    } else {
-      // If role was loaded from storage, ensure buttons are added
-      if (currentUserRole === 'student') {
-        setTimeout(() => {
-          addSyncButtonsToAllCells();
-        }, 500);
-      }
-    }
+    // Initialize authentication system
+    setTimeout(async () => {
+      await initializeAuthentication();
+    }, 1000);
 
     if (settingRegistry) {
       settingRegistry

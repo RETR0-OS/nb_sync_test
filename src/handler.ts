@@ -17,7 +17,7 @@ export async function requestAPI<T>(
   const settings = ServerConnection.makeSettings();
   const requestUrl = URLExt.join(
     settings.baseUrl,
-    'nb-sync', // API Namespace
+    'notebook-sync', // API Namespace - matches backend
     endPoint
   );
 
