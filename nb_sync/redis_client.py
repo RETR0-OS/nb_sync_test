@@ -1,166 +1,172 @@
-"""Redis client configuration for JupyterLab sync extension."""
-import asyncio
-import logging
+# jupyter_notebook_sync/redis_client.py
 import json
-from typing import Optional
+import logging
+import os
+import time
+from typing import Optional, List, Dict, Any, Tuple
+
 import redis.asyncio as redis
 
 logger = logging.getLogger(__name__)
 
+
+def _now() -> float:
+    return time.time()
+
+
 class RedisManager:
-    """Manages Redis connections for the sync extension."""
-    
-    def __init__(self, redis_url: str = "redis://localhost:6379"):
-        self.redis_url = redis_url
-        self._client: redis.Redis = redis.from_url(
-            redis_url,
+    def __init__(self, redis_url: Optional[str] = None):
+        self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://localhost:6379")
+        self._client: Optional[redis.Redis] = None
+
+    async def initialize(self) -> None:
+        self._client = redis.from_url(
+            self.redis_url,
             encoding="utf-8",
             decode_responses=True,
             retry_on_timeout=True,
-            socket_connect_timeout=5,
-            socket_keepalive=True,
-            socket_keepalive_options={},
-            health_check_interval=30
+            health_check_interval=30,
         )
-        self._pubsub = None
-        self._pubsub = None
-        
-    async def initialize(self) -> None:
-        """Initialize Redis connection."""
-        try:
-            # Test connection
-            await self._client.ping()
-            logger.info("Redis connection established")
-            
-        except redis.RedisError as e:
-            logger.error(f"Failed to connect to Redis: {e}")
-            raise
-            
+        await self._client.ping()
+        logger.info("Redis connection established at %s", self.redis_url)
+
     async def cleanup(self) -> None:
-        """Cleanup Redis connections."""
-        if self._pubsub:
-            await self._pubsub.close()
         if self._client:
             await self._client.close()
-        logger.info("Redis connections closed")
-            
+            logger.info("Redis connection closed")
+
     @property
     def client(self) -> redis.Redis:
-        """Get Redis client instance."""
-        if not self._client:
-            raise RuntimeError("Redis not initialized. Call initialize() first.")
-        return self._client
-    
-    async def create_pubsub(self):
-        """Create a new pubsub instance."""
         if not self._client:
             raise RuntimeError("Redis not initialized")
-        return self._client.pubsub()
-    
-    async def store_pending_update(self, session_code: str, cell_id: str, 
-                                 content: dict, metadata: dict) -> None:
-        """Store a pending cell update in Redis."""
-        update_key = f"pending_update:{session_code}:{cell_id}"
-        update_data = {
-            "content": json.dumps(content),
-            "metadata": json.dumps(metadata),
-            "timestamp": str(asyncio.get_event_loop().time()),
-            "status": "pending"
+        return self._client
+
+    # Session keys
+    # session:{code} -> hash { teacher_id, created_at, status, students(json) }
+    # session_updates:{code} -> zset (member=cell_id score=timestamp)
+    # pending_update:{code}:{cell_id} -> hash { content(json), metadata(json), timestamp, status }
+
+    # async def create_session(self, code: str, teacher_id: str) -> None:
+    async def create_session(self, code: str) -> None:
+        key = f"session:{code}"
+        data = {
+            # "teacher_id": teacher_id,
+            "created_at": str(_now()),
+            "status": "active",
+            "students": json.dumps([]),
         }
-        
-        # Store the update
-        await self._client.hset(update_key, mapping=update_data)
-        
-        # Set expiration (24 hours)
-        await self._client.expire(update_key, 86400)
-        
-    async def get_pending_update(self, session_code: str, cell_id: str) -> Optional[dict]:
-        """Retrieve a pending update from Redis."""
-        update_data = await self._client.hgetall(update_key)
-        
-        if not update_data:
+        await self.client.hset(key, mapping=data)
+
+    async def get_session(self, code: str) -> Optional[Dict[str, Any]]:
+        key = f"session:{code}"
+        h = await self.client.hgetall(key)
+        if not h:
             return None
-            
         return {
-            "content": json.loads(update_data["content"]),
-            "metadata": json.loads(update_data["metadata"]),
-            "timestamp": float(update_data["timestamp"]),
-            "status": update_data["status"]
+            # "teacher_id": h.get("teacher_id"),
+            "created_at": float(h.get("created_at", "0")),
+            "status": h.get("status", "ended"),
+            "students": json.loads(h.get("students", "[]")),
         }
-    
-    async def mark_update_delivered(self, session_code: str, cell_id: str) -> None:
-        """Mark an update as delivered."""
-        await self._client.hset(update_key, mapping={"status": "delivered"})
-        await self._client.hset(update_key, "status", "delivered")
-    
-    async def publish_notification(self, session_code: str, message: dict) -> None:
-        channel = f"sync_session_{session_code}"
-        await self._client.publish(channel, json.dumps(message))
-        await self._client.publish(channel, redis.utils.dumps(message))
-    
-    async def create_session(self, session_code: str, teacher_id: str) -> None:
-        session_key = f"session:{session_code}"
-        session_data = {
-            "teacher_id": teacher_id,
-            "created_at": str(asyncio.get_event_loop().time()),
-            "students": "[]",
-            "status": "active"
-        }
-        
-        await self._client.hset(session_key, mapping=session_data)
-        await self._client.expire(session_key, 86400)  # 24 hours
-        await self._client.expire(session_key, 86400)  # 24 hours
-    
-    async def add_student_to_session(self, session_code: str, student_id: str) -> bool:
-        """Add a student to an existing session."""
-        session_key = f"session:{session_code}"
-        
-        # Check if session exists
-        if not await self._client.exists(session_key):
+
+    async def add_student(self, code: str, student_id: str) -> bool:
+        sess = await self.get_session(code)
+        if not sess or sess["status"] != "active":
             return False
-            
-        students_json = await self._client.hget(session_key, "students")
-        students = json.loads(students_json) if students_json else []
-        
-        # Add student if not already in list
-        if student_id not in students:
-            students.append(student_id)
-            await self._client.hset(session_key, mapping={"students": json.dumps(students)})
-        
+        students = set(sess["students"])
+        students.add(student_id)
+        await self.client.hset(f"session:{code}", mapping={"students": json.dumps(list(students))})
         return True
-    
-    async def get_session_info(self, session_code: str) -> Optional[dict]:
-        """Get session information."""
-        session_data = await self._client.hgetall(session_key)
-        
-        if not session_data:
-            return None
-            
-        return {
-            "teacher_id": session_data["teacher_id"],
-            "created_at": float(session_data["created_at"]),
-            "students": json.loads(session_data["students"]),
-            "status": session_data["status"]
-        }
-    
-    async def end_session(self, session_code: str) -> None:
-        """End a sync session and cleanup."""
-        session_key = f"session:{session_code}"
-        
-        await self._client.hset(session_key, mapping={"status": "ended"})
-        
-        # Clean up pending updates for this session
-        pattern = f"pending_update:{session_code}:*"
+
+    async def end_session(self, code: str) -> None:
+        await self.client.hset(f"session:{code}", mapping={"status": "ended"})
+        # Optionally clean pending updates
         cursor = 0
-        
+        pattern = f"pending_update:{code}:*"
         while True:
-            cursor, keys = await self._client.scan(cursor=cursor, match=pattern)
+            cursor, keys = await self.client.scan(cursor=cursor, match=pattern, count=500)
             if keys:
-                await self._client.delete(*keys)
+                await self.client.delete(*keys)
             if cursor == 0:
                 break
-                await self._client.delete(*keys)
+        await self.client.delete(f"session_updates:{code}")
 
+    async def store_pending_update(
+        self,
+        code: str,
+        cell_id: str,
+        content: Dict[str, Any],
+        metadata: Dict[str, Any],
+        ttl_seconds: int = 86400,
+    ) -> float:
+        ts = _now()
+        key = f"pending_update:{code}:{cell_id}"
+        await self.client.hset(
+            key,
+            mapping={
+                "content": json.dumps(content),
+                "metadata": json.dumps(metadata),
+                "timestamp": str(ts),
+                "status": "pending",
+            },
+        )
+        await self.client.expire(key, ttl_seconds)
+        # Track latest timestamp per cell in session_notifications zset
+        await self.client.zadd(f"session_updates:{code}", {cell_id: ts})
+        return ts
 
-# Global Redis manager instance
+    async def get_pending_update(self, code: str, cell_id: str) -> Optional[Dict[str, Any]]:
+        key = f"pending_update:{code}:{cell_id}"
+        h = await self.client.hgetall(key)
+        if not h:
+            return None
+        return {
+            "content": json.loads(h["content"]),
+            "metadata": json.loads(h["metadata"]),
+            "timestamp": float(h["timestamp"]),
+            "status": h.get("status", "pending"),
+        }
+
+    async def update_sync_allowed(self, code: str, cell_id: str, sync_allowed: bool) -> float:
+        upd = await self.get_pending_update(code, cell_id)
+        ts = _now()
+        if upd:
+            md = upd["metadata"]
+            md["sync_allowed"] = bool(sync_allowed)
+            key = f"pending_update:{code}:{cell_id}"
+            await self.client.hset(
+                key,
+                mapping={
+                    "metadata": json.dumps(md),
+                    "timestamp": str(ts),
+                },
+            )
+            await self.client.zadd(f"session_updates:{code}", {cell_id: ts})
+            return ts
+        # If no pending update exists, still record the permission change as notification
+        await self.client.zadd(f"session_updates:{code}", {cell_id: ts})
+        return ts
+
+    async def list_notifications(self, code: str, since_ts: float) -> List[Dict[str, Any]]:
+        # Find cells updated after since_ts
+        zkey = f"session_updates:{code}"
+        items: List[Tuple[str, float]] = await self.client.zrangebyscore(
+            zkey, min=since_ts, max="+inf", withscores=True
+        )
+        notifications: List[Dict[str, Any]] = []
+        for cell_id, score in items:
+            upd = await self.get_pending_update(code, cell_id)
+            if upd:
+                notifications.append(
+                    {
+                        "cell_id": cell_id,
+                        "timestamp": upd["timestamp"],
+                        "sync_allowed": bool(upd["metadata"].get("sync_allowed", True)),
+                        "available": True,
+                    }
+                )
+        # Remove duplicates if any and sort by timestamp
+        notifications.sort(key=lambda x: x["timestamp"])
+        return notifications
+
 redis_manager = RedisManager()
