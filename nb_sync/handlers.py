@@ -231,6 +231,124 @@ class RequestSyncHandler(JsonAPIHandler):
         self.finish(json.dumps(result))
 
 
+# New hash-based read handlers
+class HashKeysListHandler(JsonAPIHandler):
+    @authenticated()
+    async def get(self):
+        # Optional query params for pagination and matching
+        cursor_param = self.get_query_argument("cursor", default="0")
+        count_param = self.get_query_argument("count", default="500")
+        match_param = self.get_query_argument("match", default=None)
+        teacher_ip = self.get_query_argument("teacher_ip", default=None)
+
+        try:
+            cursor = int(cursor_param)
+            count = int(count_param)
+        except ValueError:
+            self.set_status(400)
+            self.finish(json.dumps({"type": "error", "message": "invalid cursor or count"}))
+            return
+
+        result = await redis_manager.list_cell_hash_keys(
+            cursor=cursor,
+            match=match_param,
+            count=count,
+            redis_url_override=f"redis://{teacher_ip}:6379" if teacher_ip else None,
+        )
+        self.finish(json.dumps({"type": "hash_keys", **result}))
+
+
+class HashKeyContentHandler(JsonAPIHandler):
+    @authenticated()
+    async def get(self, hash_key: str):
+        teacher_ip = self.get_query_argument("teacher_ip", default=None)
+        data = await redis_manager.get_cell_by_hash(
+            hash_key=hash_key,
+            redis_url_override=f"redis://{teacher_ip}:6379" if teacher_ip else None,
+        )
+        if not data:
+            self.set_status(404)
+            self.finish(json.dumps({"type": "error", "message": "not found"}))
+            return
+        self.finish(json.dumps({"type": "hash_key_content", "key": hash_key, **data}))
+
+
+# Hash-based cell storage handlers (new specification)
+
+class PushCellHashHandler(JsonAPIHandler):
+    """
+    Handler for hash-based cell pushing (new specification).
+    Teacher pushes cell content with cell_id and created_at timestamp.
+    """
+    @teacher_required
+    async def post(self):
+        user_info = get_current_user_info(self)
+        teacher_id = user_info['user_id']
+
+        data = self.get_json()
+        cell_id = data.get("cell_id")
+        created_at = data.get("created_at")
+        content = data.get("content")
+        ttl_seconds = data.get("ttl_seconds", 86400)  # Default 24 hours
+
+        if not cell_id or not created_at or content is None:
+            self.set_status(400)
+            self.finish(json.dumps({
+                "type": "error", 
+                "message": "cell_id, created_at, and content are required"
+            }))
+            return
+
+        hash_key = await session_service.push_cell_hash(cell_id, created_at, content, ttl_seconds)
+        self.finish(json.dumps({
+            "type": "push_confirmed_hash",
+            "cell_id": cell_id,
+            "created_at": created_at,
+            "hash_key": hash_key[:8],  # Only show first 8 chars for security
+            "teacher_id": teacher_id
+        }))
+
+
+class RequestCellSyncHashHandler(JsonAPIHandler):
+    """
+    Handler for hash-based cell sync requests (new specification).
+    Student requests cell content using cell_id and created_at timestamp.
+    """
+    @student_required
+    async def post(self):
+        user_info = get_current_user_info(self)
+        student_id = user_info['user_id']
+
+        data = self.get_json()
+        cell_id = data.get("cell_id")
+        created_at = data.get("created_at")
+
+        if not cell_id or not created_at:
+            self.set_status(400)
+            self.finish(json.dumps({
+                "type": "error",
+                "message": "cell_id and created_at are required"
+            }))
+            return
+
+        cell_data = await session_service.request_cell_sync_hash(cell_id, created_at)
+        if not cell_data:
+            self.set_status(404)
+            self.finish(json.dumps({
+                "type": "error",
+                "message": "Cell content not found for the specified cell_id and created_at"
+            }))
+            return
+
+        self.finish(json.dumps({
+            "type": "cell_sync_hash",
+            "cell_id": cell_id,
+            "content": cell_data["content"],
+            "created_at": cell_data["created_at"],
+            "student_id": student_id
+        }))
+
+
 def setup_handlers(web_app):
     host_pattern = ".*$"
     base_url = web_app.settings["base_url"]
@@ -247,6 +365,13 @@ def setup_handlers(web_app):
         (url_path_join(api_base, "sessions", r"(?P<code>[A-Z0-9]+)", "notifications"), NotificationsHandler),  # GET
         (url_path_join(api_base, "sessions", r"(?P<code>[A-Z0-9]+)", "cells", r"(?P<cell_id>[^/]+)", "pending"), PendingCellHandler),  # GET
         (url_path_join(api_base, "sessions", r"(?P<code>[A-Z0-9]+)", "cells", r"(?P<cell_id>[^/]+)", "request-sync"), RequestSyncHandler),  # POST
+        
+        # New hash-based handlers (new specification)
+        (url_path_join(api_base, "hash", "push-cell"), PushCellHashHandler),  # POST
+        (url_path_join(api_base, "hash", "request-sync"), RequestCellSyncHashHandler),  # POST
+        # Read APIs for listing and previewing by hash
+        (url_path_join(api_base, "hash", "keys"), HashKeysListHandler),  # GET
+        (url_path_join(api_base, "hash", "key", r"(?P<hash_key>[a-f0-9]{64})"), HashKeyContentHandler),  # GET
     ]
     web_app.add_handlers(host_pattern, handlers)
     logger.info("Notebook Sync REST handlers registered at %s", api_base)

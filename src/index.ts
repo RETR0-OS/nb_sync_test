@@ -8,7 +8,7 @@ import { INotebookTracker } from '@jupyterlab/notebook';
 import { Cell } from '@jupyterlab/cells';
 import { Widget } from '@lumino/widgets';
 
-import { requestAPI } from './handler';
+import { requestAPI, listHashKeys, getCellByHash, pushCellByHash } from './handler';
 import { authService, UserRole } from './auth';
 
 /**
@@ -193,7 +193,7 @@ async function initializeAuthentication(): Promise<void> {
 let addSyncButtonsToAllCells: () => void;
 
 /**
- * Mock cell IDs data
+ * Mock cell IDs data (fallback)
  */
 const MOCK_CELL_IDS = [
   '0955501c-5637-4204-9ba5-a157055f6da8',
@@ -205,7 +205,7 @@ const MOCK_CELL_IDS = [
 ];
 
 /**
- * Mock code snippets mapped to cell IDs
+ * Mock code snippets mapped to cell IDs (fallback)
  */
 const MOCK_CODE_SNIPPETS: { [key: string]: string } = {
   '0955501c-5637-4204-9ba5-a157055f6da8': `print("Hello World!")
@@ -306,57 +306,104 @@ function createCellIdDropdown(buttonElement: HTMLElement, currentCell: Cell): HT
   const dropdownContent = document.createElement('div');
   dropdownContent.className = 'nb-sync-dropdown-content';
 
-  MOCK_CELL_IDS.forEach(cellId => {
+  // Render helper for options
+  const renderOption = (label: string, onHover: () => void, onLeave: () => void, onClick: () => void) => {
     const option = document.createElement('div');
     option.className = 'nb-sync-dropdown-option';
-    option.textContent = cellId;
-
-    let previewElement: HTMLElement | null = null;
-
-    // Add hover to show preview
-    option.addEventListener('mouseenter', () => {
-      // Check if preview already exists for this cell
-      if (currentCell.node.querySelector('.nb-sync-code-preview')) {
-        return;
-      }
-
-      // TODO: Replace with actual fetch request to backend
-      // const code = await fetchCodeFromBackend(cellId);
-
-      const code = MOCK_CODE_SNIPPETS[cellId] || '# No code available';
-      previewElement = createCodePreview(currentCell, code);
-    });
-
-    // Remove preview on mouse leave
-    option.addEventListener('mouseleave', () => {
-      if (previewElement) {
-        previewElement.remove();
-        previewElement = null;
-      }
-    });
-
-    // Click to replace cell content
-    option.addEventListener('click', (e) => {
-      e.stopPropagation();
-
-      // Remove any existing preview
-      if (previewElement) {
-        previewElement.remove();
-        previewElement = null;
-      }
-
-      // TODO: Replace with actual fetch request to backend
-      // const code = await fetchCodeFromBackend(cellId);
-
-      const code = MOCK_CODE_SNIPPETS[cellId] || '# No code available';
-      replaceCellContent(currentCell, code);
-
-      console.log('Replaced cell content with code from:', cellId);
-      dropdown.remove();
-    });
-
+    option.textContent = label;
+    option.addEventListener('mouseenter', onHover);
+    option.addEventListener('mouseleave', onLeave);
+    option.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
     dropdownContent.appendChild(option);
-  });
+  };
+
+  // Ask for teacher IP once per dropdown open
+  const teacherIp = window.prompt('Enter teacher IP for Redis (leave blank for default server):', '');
+
+  // Try live data first
+  let abortController: AbortController | null = null;
+
+  const loadLive = async () => {
+    try {
+      const res = await listHashKeys({ teacher_ip: teacherIp || undefined, count: 200 });
+      const keys = res.items || [];
+      if (keys.length === 0) {
+        return false;
+      }
+
+      for (const fullKey of keys) {
+        // fullKey is like 'cell_hash:<hash>'
+        const parts = fullKey.split(':');
+        const hash = parts[1] || fullKey;
+
+        let previewElement: HTMLElement | null = null;
+
+        renderOption(hash.substring(0, 8) + '…', async () => {
+          // Hover: fetch preview
+          if (currentCell.node.querySelector('.nb-sync-code-preview')) {
+            return;
+          }
+          if (abortController) {
+            abortController.abort();
+          }
+          abortController = new AbortController();
+          try {
+            const data = await getCellByHash(hash, teacherIp || undefined);
+            const code = data?.content || '# No content available';
+            previewElement = createCodePreview(currentCell, code);
+          } catch (e) {
+            console.warn('Preview fetch failed:', e);
+          }
+        }, () => {
+          if (previewElement) {
+            previewElement.remove();
+            previewElement = null;
+          }
+          if (abortController) {
+            abortController.abort();
+            abortController = null;
+          }
+        }, async () => {
+          // Click: fetch and replace cell content
+          try {
+            const data = await getCellByHash(hash, teacherIp || undefined);
+            const code = data?.content || '# No content available';
+            replaceCellContent(currentCell, code);
+            console.log('Replaced cell content from hash:', hash.substring(0, 8));
+          } catch (e) {
+            console.error('Failed to fetch cell by hash:', e);
+          }
+          dropdown.remove();
+        });
+      }
+      return true;
+    } catch (e) {
+      console.warn('Falling back to mock data due to error:', e);
+      return false;
+    }
+  };
+
+  // Fallback: render mock items
+  const renderMock = () => {
+    MOCK_CELL_IDS.forEach(cellId => {
+      let previewElement: HTMLElement | null = null;
+      renderOption(cellId, () => {
+        if (currentCell.node.querySelector('.nb-sync-code-preview')) return;
+        const code = MOCK_CODE_SNIPPETS[cellId] || '# No code available';
+        previewElement = createCodePreview(currentCell, code);
+      }, () => {
+        if (previewElement) { previewElement.remove(); previewElement = null; }
+      }, () => {
+        const code = MOCK_CODE_SNIPPETS[cellId] || '# No code available';
+        replaceCellContent(currentCell, code);
+        console.log('Replaced cell content with code from:', cellId);
+        dropdown.remove();
+      });
+    });
+  };
+
+  // Kick off load
+  loadLive().then(success => { if (!success) renderMock(); });
 
   dropdown.appendChild(dropdownContent);
 
@@ -444,6 +491,59 @@ function createToggleButton(): Widget {
     updateButtonState();
     console.log('Sync toggled:', syncEnabled ? 'ON' : 'OFF');
   });
+
+  // Add a secondary action button for publishing via hash
+  const publishBtn = document.createElement('button');
+  publishBtn.className = 'nb-sync-teacher-publish-button';
+  publishBtn.textContent = 'Publish (Hash)';
+  publishBtn.title = 'Publish this cell content using hash-based sync';
+  publishBtn.style.marginLeft = '8px';
+  publishBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    try {
+      // Find owning cell from DOM
+      const cellNode = button.node.closest('.jp-Cell');
+      if (!cellNode) return;
+      // We need to map node to Cell; simplest is to search visible notebook
+      // Fallback: get content via sharedModel if possible by traversing notebook later
+      // For simplicity in this additive change, read text content from CodeMirror DOM as preview
+      let content = '';
+      const pre = cellNode.querySelector('.jp-InputArea-editor');
+      if ((pre as any) && (pre as any).textContent) {
+        content = (pre as any).textContent || '';
+      }
+
+      // Use metadata timestamp if present; else generate new
+      let createdAt = new Date().toISOString();
+      try {
+        const metaNode = (cellNode as any).model?.metadata;
+        if (metaNode && metaNode['nb_sync_created_at']) {
+          createdAt = metaNode['nb_sync_created_at'];
+        }
+      } catch {}
+
+      // Derive a simple cell_id surrogate from DOM id or random fallback
+      const cellId = (cellNode as HTMLElement).id || 'cell_' + Math.random().toString(36).slice(2, 10);
+
+      const res = await pushCellByHash({ cell_id: cellId, created_at: createdAt, content });
+      console.log('Published cell via hash:', res.hash_key);
+      // Optional UI feedback
+      alert(`Published (hash): ${res.hash_key}`);
+    } catch (err) {
+      console.error('Publish (hash) failed:', err);
+      alert('Failed to publish cell via hash. See console.');
+    }
+  });
+
+  // Wrap both buttons in a container
+  const container = document.createElement('div');
+  container.style.display = 'flex';
+  container.style.alignItems = 'center';
+  container.appendChild(button.node);
+  container.appendChild(publishBtn);
+
+  // Replace widget node with container
+  (button as any).node = container;
 
   return button;
 }

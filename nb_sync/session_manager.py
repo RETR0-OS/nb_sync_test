@@ -113,5 +113,40 @@ class SessionService:
             logger.error(f"Error verifying user in session: {e}")
             return False
 
+    # Hash-based cell operations (new specification)
+    
+    async def push_cell_hash(self, cell_id: str, created_at: str, content: str, ttl_seconds: int = 86400) -> str:
+        """
+        Push cell content using hash-based storage (new specification).
+        
+        Args:
+            cell_id: The cell identifier  
+            created_at: Creation timestamp as string
+            content: The cell content to store
+            ttl_seconds: Time-to-live for stored data
+            
+        Returns:
+            The hash key used for storage
+        """
+        hash_key = await redis_manager.store_cell_by_hash(cell_id, created_at, content, ttl_seconds)
+        logger.info("Pushed cell using hash-based storage: %s (created_at=%s)", cell_id, created_at)
+        return hash_key
+
+    async def request_cell_sync_hash(self, cell_id: str, created_at: str) -> Optional[Dict[str, Any]]:
+        """
+        Request cell sync using hash-based retrieval (new specification).
+        
+        Args:
+            cell_id: The cell identifier
+            created_at: Creation timestamp as string
+            
+        Returns:
+            Cell data dict with 'content' and 'created_at', or None if not found
+        """
+        cell_data = await redis_manager.get_cell_by_identity(cell_id, created_at)
+        if cell_data:
+            logger.info("Retrieved cell using hash-based storage: %s (created_at=%s)", cell_id, created_at)
+        return cell_data
+
 
 session_service = SessionService()

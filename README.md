@@ -1,6 +1,96 @@
 # JupyterLab Notebook Sync Extension
 
-A JupyterLab extension that enables real-time collaboration between teachers and students with request-based synchronization.
+A JupyterLab extension that enables real-time collaboration between teachers a   };
+   ```
+
+3. **Request Sync** (when ready):
+   ```javascript
+   ws.send(JSON.stringify({
+       type: 'request_sync',
+       cell_id: 'cell_001'
+   }));
+   ```
+
+## Hash-Based Cell Sync (New Specification)
+
+The extension now supports a simplified hash-based approach for direct teacher-to-student cell synchronization without session management.
+
+### Configuration for Networked Setup
+
+When teacher and students are on the same network:
+
+1. **Teacher Setup**:
+   ```bash
+   # Start Redis server accessible from network
+   redis-server --bind 0.0.0.0 --port 6379
+   
+   # Set Redis URL (optional, defaults to localhost)
+   export REDIS_URL="redis://0.0.0.0:6379"
+   ```
+
+2. **Student Setup**:
+   ```bash
+   # Point to teacher's Redis server
+   export REDIS_URL="redis://192.168.1.42:6379"  # Replace with teacher's IP
+   ```
+
+### Hash-Based API Endpoints
+
+#### Teacher: Push Cell Content
+
+```bash
+POST /notebook-sync/hash/push-cell
+Content-Type: application/json
+
+{
+  "cell_id": "cell_001",
+  "created_at": "2025-01-15T10:30:00.000Z", 
+  "content": "print('Hello, students!')",
+  "ttl_seconds": 86400
+}
+
+# Response:
+{
+  "type": "push_confirmed_hash",
+  "cell_id": "cell_001", 
+  "created_at": "2025-01-15T10:30:00.000Z",
+  "hash_key": "a1b2c3d4",
+  "teacher_id": "teacher123"
+}
+```
+
+#### Student: Request Cell Sync
+
+```bash
+POST /notebook-sync/hash/request-sync
+Content-Type: application/json
+
+{
+  "cell_id": "cell_001",
+  "created_at": "2025-01-15T10:30:00.000Z"
+}
+
+# Response:
+{
+  "type": "cell_sync_hash", 
+  "cell_id": "cell_001",
+  "content": "print('Hello, students!')",
+  "created_at": "2025-01-15T10:30:00.000Z",
+  "student_id": "student456" 
+}
+```
+
+### Hash Key Generation
+
+- Keys are generated using SHA256 hash of `cell_id:created_at`
+- Same cell_id + created_at always produces the same hash key
+- Enables deterministic retrieval without complex session management
+
+### Backward Compatibility
+
+- All existing session-based APIs remain functional
+- Hash-based methods are additive, not replacement
+- Can use both approaches simultaneouslys with request-based synchronization.
 
 ## Features
 
