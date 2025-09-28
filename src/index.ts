@@ -50,6 +50,21 @@ function addTimestampToCell(cell: Cell): void {
   }
 }
 
+function addNBSyncToCell(cell: Cell): void {
+
+  if (currentUserRole == 'teacher') {
+    return;
+  }
+
+  if (cell.model && cell.model.type === 'code' && cell.model.metadata) {
+    const metadata = cell.model.metadata as any;
+    if (metadata['nb_sync_enabled'] === undefined) {
+      metadata['nb_sync_enabled'] = false;
+      console.log('Initialized nb_sync_enabled=false for code cell');
+    }
+  }
+}
+
 /**
  * Create role selection dialog
  */
@@ -303,12 +318,23 @@ function createCellIdDropdown(buttonElement: HTMLElement, currentCell: Cell): HT
 
     // Click to replace cell content
     option.addEventListener('click', (e) => {
+      console.log('Cell ID selected:', cellId);
       e.stopPropagation();
 
       // Remove any existing preview
       if (previewElement) {
         previewElement.remove();
         previewElement = null;
+      }
+
+      if (currentCell.model.type === 'code' && currentUserRole === 'student') {
+        const metadata = currentCell.model.metadata as any;
+        metadata['nb_sync_enabled'] = true;
+        console.log('Cell marked as synced');
+        const inputArea = currentCell.node.querySelector('.jp-InputArea-editor') as HTMLElement;
+        if (inputArea) {
+          inputArea.classList.add('nb-sync-synced');  
+        }
       }
 
       // TODO: Replace with actual fetch request to backend
@@ -480,6 +506,8 @@ const plugin: JupyterFrontEndPlugin<void> = {
             }
           }
 
+          addNBSyncToCell(cell);
+
           addSyncButtonToCell(cell);
         }
       });
@@ -502,6 +530,8 @@ const plugin: JupyterFrontEndPlugin<void> = {
               addTimestampToCell(cell);
             }
           }
+
+          addNBSyncToCell(cell);
 
           addSyncButtonToCell(cell);
         }
