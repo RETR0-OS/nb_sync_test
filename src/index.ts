@@ -21,6 +21,36 @@ let currentUserRole: 'teacher' | 'student' | null = null;
 let syncEnabled = false;
 
 /**
+ * Generate ISO timestamp for cell creation
+ */
+function generateTimestamp(): string {
+  return new Date().toISOString();
+}
+
+/**
+ * Add creation timestamp to cell metadata (teacher only)
+ */
+function addTimestampToCell(cell: Cell): void {
+  if (currentUserRole !== 'teacher') {
+    return;
+  }
+
+  try {
+    const timestamp = generateTimestamp();
+
+    // Access cell metadata and add timestamp
+    if (cell.model && cell.model.metadata) {
+      // Use direct property access for metadata
+      const metadata = cell.model.metadata as any;
+      metadata['nb_sync_created_at'] = timestamp;
+      console.log(`Added timestamp to cell: ${timestamp}`);
+    }
+  } catch (error) {
+    console.error('Error adding timestamp to cell:', error);
+  }
+}
+
+/**
  * Create role selection dialog
  */
 function createRoleSelectionDialog(): void {
@@ -441,6 +471,15 @@ const plugin: JupyterFrontEndPlugin<void> = {
         const notebook = notebookPanel.content;
         for (let i = 0; i < notebook.widgets.length; i++) {
           const cell = notebook.widgets[i];
+
+          // Add timestamp to existing cells that don't have one (teacher only)
+          if (currentUserRole === 'teacher' && cell.model && cell.model.metadata) {
+            const metadata = cell.model.metadata as any;
+            if (!metadata['nb_sync_created_at']) {
+              addTimestampToCell(cell);
+            }
+          }
+
           addSyncButtonToCell(cell);
         }
       });
@@ -452,14 +491,34 @@ const plugin: JupyterFrontEndPlugin<void> = {
       notebookTracker.widgetAdded.connect((_sender, notebookPanel) => {
         const notebook = notebookPanel.content;
 
-        // Add buttons to existing cells
+        // Add buttons to existing cells and timestamps for teachers
         for (let i = 0; i < notebook.widgets.length; i++) {
           const cell = notebook.widgets[i];
+
+          // Add timestamp to existing cells that don't have one (teacher only)
+          if (currentUserRole === 'teacher' && cell.model && cell.model.metadata) {
+            const metadata = cell.model.metadata as any;
+            if (!metadata['nb_sync_created_at']) {
+              addTimestampToCell(cell);
+            }
+          }
+
           addSyncButtonToCell(cell);
         }
 
         // Add buttons to new cells as they are created
-        notebook.model?.cells.changed.connect(() => {
+        notebook.model?.cells.changed.connect((_sender, args) => {
+          // Add timestamp to newly created cells (teacher only)
+          if (args.type === 'add' && currentUserRole === 'teacher') {
+            args.newValues.forEach((cellModel: any) => {
+              // Find the corresponding cell widget
+              const cellWidget = notebook.widgets.find(widget => widget.model === cellModel);
+              if (cellWidget) {
+                addTimestampToCell(cellWidget);
+              }
+            });
+          }
+
           setTimeout(() => {
             for (let i = 0; i < notebook.widgets.length; i++) {
               const cell = notebook.widgets[i];
@@ -474,6 +533,15 @@ const plugin: JupyterFrontEndPlugin<void> = {
         const notebook = notebookPanel.content;
         for (let i = 0; i < notebook.widgets.length; i++) {
           const cell = notebook.widgets[i];
+
+          // Add timestamp to existing cells that don't have one (teacher only)
+          if (currentUserRole === 'teacher' && cell.model && cell.model.metadata) {
+            const metadata = cell.model.metadata as any;
+            if (!metadata['nb_sync_created_at']) {
+              addTimestampToCell(cell);
+            }
+          }
+
           addSyncButtonToCell(cell);
         }
       });
