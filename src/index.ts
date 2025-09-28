@@ -11,6 +11,154 @@ import { Widget } from '@lumino/widgets';
 import { requestAPI } from './handler';
 
 /**
+ * User role storage
+ */
+let currentUserRole: 'teacher' | 'student' | null = null;
+
+/**
+ * Teacher sync toggle state
+ */
+let syncEnabled = false;
+
+/**
+ * Generate ISO timestamp for cell creation
+ */
+function generateTimestamp(): string {
+  return new Date().toISOString();
+}
+
+/**
+ * Add creation timestamp to cell metadata (teacher only)
+ */
+function addTimestampToCell(cell: Cell): void {
+  if (currentUserRole !== 'teacher') {
+    return;
+  }
+
+  try {
+    const timestamp = generateTimestamp();
+
+    // Access cell metadata and add timestamp
+    if (cell.model && cell.model.metadata) {
+      // Use direct property access for metadata
+      const metadata = cell.model.metadata as any;
+      metadata['nb_sync_created_at'] = timestamp;
+      console.log(`Added timestamp to cell: ${timestamp}`);
+    }
+  } catch (error) {
+    console.error('Error adding timestamp to cell:', error);
+  }
+}
+
+/**
+ * Create role selection dialog
+ */
+function createRoleSelectionDialog(): void {
+  // Create overlay
+  const overlay = document.createElement('div');
+  overlay.className = 'nb-sync-role-overlay';
+
+  // Create dialog
+  const dialog = document.createElement('div');
+  dialog.className = 'nb-sync-role-dialog';
+
+  // Create title
+  const title = document.createElement('h2');
+  title.textContent = 'Choose Your Role';
+  title.className = 'nb-sync-role-title';
+
+  // Create subtitle
+  const subtitle = document.createElement('p');
+  subtitle.textContent = 'Select how you want to use NB Sync in this session:';
+  subtitle.className = 'nb-sync-role-subtitle';
+
+  // Create teacher button
+  const teacherButton = document.createElement('button');
+  teacherButton.textContent = '👨‍🏫 Teacher';
+  teacherButton.className = 'nb-sync-role-button nb-sync-teacher-button';
+  teacherButton.addEventListener('click', () => {
+    setUserRole('teacher');
+    overlay.remove();
+  });
+
+  // Create student button
+  const studentButton = document.createElement('button');
+  studentButton.textContent = '👨‍🎓 Student';
+  studentButton.className = 'nb-sync-role-button nb-sync-student-button';
+  studentButton.addEventListener('click', () => {
+    setUserRole('student');
+    overlay.remove();
+  });
+
+  // Assemble dialog
+  dialog.appendChild(title);
+  dialog.appendChild(subtitle);
+  dialog.appendChild(teacherButton);
+  dialog.appendChild(studentButton);
+
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+}
+
+/**
+ * Set user role and initialize appropriate features
+ */
+function setUserRole(role: 'teacher' | 'student'): void {
+  currentUserRole = role;
+  console.log(`User role set to: ${role}`);
+
+  // Store role in localStorage for persistence
+  localStorage.setItem('nb-sync-role', role);
+
+  // Initialize features based on role
+  if (role === 'student') {
+    initializeStudentFeatures();
+  } else {
+    initializeTeacherFeatures();
+  }
+}
+
+/**
+ * Initialize features for student role
+ */
+function initializeStudentFeatures(): void {
+  console.log('Initializing student features...');
+  // Add sync buttons to all existing cells
+  console.log('Calling addSyncButtonsToAllCells for student features');
+  addSyncButtonsToAllCells();
+}
+
+/**
+ * Initialize features for teacher role
+ */
+function initializeTeacherFeatures(): void {
+  console.log('Initializing teacher features...');
+  // Add toggle buttons to all existing cells
+  console.log('Calling addSyncButtonsToAllCells for teacher features');
+  addSyncButtonsToAllCells();
+}
+
+/**
+ * Check for stored role preference
+ */
+function checkStoredRole(): boolean {
+  const storedRole = localStorage.getItem('nb-sync-role') as 'teacher' | 'student' | null;
+  console.log('Checking stored role:', storedRole);
+  if (storedRole && (storedRole === 'teacher' || storedRole === 'student')) {
+    console.log('Valid stored role found, setting role to:', storedRole);
+    setUserRole(storedRole);
+    return true;
+  }
+  console.log('No valid stored role found');
+  return false;
+}
+
+/**
+ * Add sync buttons to all existing cells
+ */
+let addSyncButtonsToAllCells: () => void;
+
+/**
  * Mock cell IDs data
  */
 const MOCK_CELL_IDS = [
@@ -133,6 +281,11 @@ function createCellIdDropdown(buttonElement: HTMLElement, currentCell: Cell): HT
 
     // Add hover to show preview
     option.addEventListener('mouseenter', () => {
+      // Check if preview already exists for this cell
+      if (currentCell.node.querySelector('.nb-sync-code-preview')) {
+        return;
+      }
+
       // TODO: Replace with actual fetch request to backend
       // const code = await fetchCodeFromBackend(cellId);
 
@@ -196,7 +349,7 @@ function createCellIdDropdown(buttonElement: HTMLElement, currentCell: Cell): HT
 }
 
 /**
- * Create a sync button widget
+ * Create a sync button widget (for students)
  */
 function createSyncButton(cell: Cell): Widget {
   const button = new Widget({ node: document.createElement('button') });
@@ -227,22 +380,71 @@ function createSyncButton(cell: Cell): Widget {
 }
 
 /**
- * Add sync button to a cell
+ * Create a toggle button widget (for teachers)
+ */
+function createToggleButton(): Widget {
+  const button = new Widget({ node: document.createElement('button') });
+  button.node.className = 'nb-sync-toggle-button';
+  button.node.textContent = syncEnabled ? 'Sync: ON' : 'Sync: OFF';
+  button.node.title = 'Toggle sync for this cell';
+
+  // Update button appearance based on state
+  const updateButtonState = () => {
+    if (syncEnabled) {
+      button.node.textContent = 'Sync: ON';
+      button.node.classList.add('sync-enabled');
+      button.node.classList.remove('sync-disabled');
+    } else {
+      button.node.textContent = 'Sync: OFF';
+      button.node.classList.add('sync-disabled');
+      button.node.classList.remove('sync-enabled');
+    }
+  };
+
+  updateButtonState();
+
+  // Add click handler to toggle sync state
+  button.node.addEventListener('click', (e) => {
+    e.stopPropagation();
+    syncEnabled = !syncEnabled;
+    updateButtonState();
+    console.log('Sync toggled:', syncEnabled ? 'ON' : 'OFF');
+  });
+
+  return button;
+}
+
+/**
+ * Add sync button to a cell (for students) or toggle button (for teachers)
  */
 function addSyncButtonToCell(cell: Cell): void {
-  if (!cell.node.querySelector('.nb-sync-button')) {
-    const syncButton = createSyncButton(cell);
+  // Only add buttons for students and teachers
+  if (!currentUserRole || (currentUserRole !== 'student' && currentUserRole !== 'teacher')) {
+    return;
+  }
 
-    // Create a container for the button positioned in top-right
-    const buttonContainer = document.createElement('div');
-    buttonContainer.className = 'nb-sync-button-container';
-    buttonContainer.appendChild(syncButton.node);
+  // Check if button already exists
+  const existingButton = cell.node.querySelector('.nb-sync-button') || cell.node.querySelector('.nb-sync-toggle-button');
+  if (existingButton) {
+    return;
+  }
 
-    // Insert the button into the cell's input area
-    const inputArea = cell.node.querySelector('.jp-Cell-inputArea');
-    if (inputArea) {
-      inputArea.appendChild(buttonContainer);
-    }
+  let button: Widget;
+  if (currentUserRole === 'student') {
+    button = createSyncButton(cell);
+  } else {
+    button = createToggleButton();
+  }
+
+  // Create a container for the button positioned in top-right
+  const buttonContainer = document.createElement('div');
+  buttonContainer.className = 'nb-sync-button-container';
+  buttonContainer.appendChild(button.node);
+
+  // Insert the button into the cell's input area
+  const inputArea = cell.node.querySelector('.jp-Cell-inputArea');
+  if (inputArea) {
+    inputArea.appendChild(buttonContainer);
   }
 }
 
@@ -262,35 +464,106 @@ const plugin: JupyterFrontEndPlugin<void> = {
   ) => {
     console.log('JupyterLab extension nb_sync is activated!');
 
-    // Add sync buttons to existing and new cells
-    notebookTracker.widgetAdded.connect((_sender, notebookPanel) => {
-      const notebook = notebookPanel.content;
+    // Update the addSyncButtonsToAllCells function first
+    addSyncButtonsToAllCells = () => {
+      console.log('Adding sync buttons to all cells, current role:', currentUserRole);
+      notebookTracker.forEach(notebookPanel => {
+        const notebook = notebookPanel.content;
+        for (let i = 0; i < notebook.widgets.length; i++) {
+          const cell = notebook.widgets[i];
 
-      // Add buttons to existing cells
-      for (let i = 0; i < notebook.widgets.length; i++) {
-        const cell = notebook.widgets[i];
-        addSyncButtonToCell(cell);
-      }
-
-      // Add buttons to new cells as they are created
-      notebook.model?.cells.changed.connect(() => {
-        setTimeout(() => {
-          for (let i = 0; i < notebook.widgets.length; i++) {
-            const cell = notebook.widgets[i];
-            addSyncButtonToCell(cell);
+          // Add timestamp to existing cells that don't have one (teacher only)
+          if (currentUserRole === 'teacher' && cell.model && cell.model.metadata) {
+            const metadata = cell.model.metadata as any;
+            if (!metadata['nb_sync_created_at']) {
+              addTimestampToCell(cell);
+            }
           }
-        }, 100); // Small delay to ensure cell DOM is ready
-      });
-    });
 
-    // Handle already open notebooks
-    notebookTracker.forEach(notebookPanel => {
-      const notebook = notebookPanel.content;
-      for (let i = 0; i < notebook.widgets.length; i++) {
-        const cell = notebook.widgets[i];
-        addSyncButtonToCell(cell);
+          addSyncButtonToCell(cell);
+        }
+      });
+    };
+
+    // Store reference to notebook tracker for later use
+    const setupNotebookTracking = () => {
+      // Add sync buttons to existing and new cells
+      notebookTracker.widgetAdded.connect((_sender, notebookPanel) => {
+        const notebook = notebookPanel.content;
+
+        // Add buttons to existing cells and timestamps for teachers
+        for (let i = 0; i < notebook.widgets.length; i++) {
+          const cell = notebook.widgets[i];
+
+          // Add timestamp to existing cells that don't have one (teacher only)
+          if (currentUserRole === 'teacher' && cell.model && cell.model.metadata) {
+            const metadata = cell.model.metadata as any;
+            if (!metadata['nb_sync_created_at']) {
+              addTimestampToCell(cell);
+            }
+          }
+
+          addSyncButtonToCell(cell);
+        }
+
+        // Add buttons to new cells as they are created
+        notebook.model?.cells.changed.connect((_sender, args) => {
+          // Add timestamp to newly created cells (teacher only)
+          if (args.type === 'add' && currentUserRole === 'teacher') {
+            args.newValues.forEach((cellModel: any) => {
+              // Find the corresponding cell widget
+              const cellWidget = notebook.widgets.find(widget => widget.model === cellModel);
+              if (cellWidget) {
+                addTimestampToCell(cellWidget);
+              }
+            });
+          }
+
+          setTimeout(() => {
+            for (let i = 0; i < notebook.widgets.length; i++) {
+              const cell = notebook.widgets[i];
+              addSyncButtonToCell(cell);
+            }
+          }, 100); // Small delay to ensure cell DOM is ready
+        });
+      });
+
+      // Handle already open notebooks
+      notebookTracker.forEach(notebookPanel => {
+        const notebook = notebookPanel.content;
+        for (let i = 0; i < notebook.widgets.length; i++) {
+          const cell = notebook.widgets[i];
+
+          // Add timestamp to existing cells that don't have one (teacher only)
+          if (currentUserRole === 'teacher' && cell.model && cell.model.metadata) {
+            const metadata = cell.model.metadata as any;
+            if (!metadata['nb_sync_created_at']) {
+              addTimestampToCell(cell);
+            }
+          }
+
+          addSyncButtonToCell(cell);
+        }
+      });
+    };
+
+    // Setup notebook tracking
+    setupNotebookTracking();
+
+    // Check for stored role or show role selection dialog
+    if (!checkStoredRole()) {
+      // Show role selection dialog after a brief delay
+      setTimeout(() => {
+        createRoleSelectionDialog();
+      }, 1000);
+    } else {
+      // If role was loaded from storage, ensure buttons are added
+      if (currentUserRole === 'student') {
+        setTimeout(() => {
+          addSyncButtonsToAllCells();
+        }, 500);
       }
-    });
+    }
 
     if (settingRegistry) {
       settingRegistry
