@@ -113,6 +113,11 @@ class SessionService:
             logger.error(f"Error verifying user in session: {e}")
             return False
 
+    # Optional enhancement:
+    async def session_exists(self, code: str) -> bool:
+        sess = await redis_manager.get_session(code)
+        return bool(sess and sess["status"] == "active")
+
     # Hash-based cell operations (new specification)
     
     async def push_cell_hash(self, cell_id: str, created_at: str, content: str, ttl_seconds: int = 86400) -> str:

@@ -109,6 +109,23 @@ class SessionEndHandler(JsonAPIHandler):
         self.finish(json.dumps({"type": "session_ended", "session_code": code}))
 
 
+class SessionValidateHandler(JsonAPIHandler):
+    @authenticated()
+    async def get(self, code: str):
+        session_info = await session_service.get_session_status(code)
+        if not session_info:
+            self.set_status(404)
+            self.finish(json.dumps({"type": "error", "message": "Session not found"}))
+            return
+
+        self.finish(json.dumps({
+            "type": "session_status",
+            "session_code": code,
+            "status": session_info["status"],
+            "teacher_id": session_info["teacher_id"]
+        }))
+
+
 class PushCellHandler(JsonAPIHandler):
     @teacher_required
     async def post(self, code: str, cell_id: str):
@@ -360,6 +377,7 @@ def setup_handlers(web_app):
         (url_path_join(api_base, "sessions"), SessionCreateHandler),  # POST
         (url_path_join(api_base, "sessions", r"(?P<code>[A-Z0-9]+)", "join"), SessionJoinHandler),  # POST
         (url_path_join(api_base, "sessions", r"(?P<code>[A-Z0-9]+)"), SessionEndHandler),  # DELETE
+        (url_path_join(api_base, "sessions", r"(?P<code>[A-Z0-9]+)", "status"), SessionValidateHandler),  # GET
         (url_path_join(api_base, "sessions", r"(?P<code>[A-Z0-9]+)", "cells", r"(?P<cell_id>[^/]+)", "push"), PushCellHandler),  # POST
         (url_path_join(api_base, "sessions", r"(?P<code>[A-Z0-9]+)", "cells", r"(?P<cell_id>[^/]+)", "toggle"), ToggleSyncHandler),  # POST
         (url_path_join(api_base, "sessions", r"(?P<code>[A-Z0-9]+)", "notifications"), NotificationsHandler),  # GET

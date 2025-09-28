@@ -119,3 +119,64 @@ export async function pushCellByHash(params: {
     })
   });
 }
+
+/**
+ * Session API wrappers
+ */
+export async function createSession(): Promise<{ session_code: string }> {
+  return requestAPI<{ session_code: string }>('sessions', {
+    method: 'POST'
+  });
+}
+
+export async function joinSession(code: string): Promise<any> {
+  return requestAPI<any>(`sessions/${code}/join`, {
+    method: 'POST'
+  });
+}
+
+export async function endSession(code: string): Promise<void> {
+  await requestAPI<void>(`sessions/${code}`, {
+    method: 'DELETE'
+  });
+}
+
+export async function pushCellToSession(code: string, cell_id: string, content: any, metadata: any): Promise<any> {
+  return requestAPI<any>(`sessions/${code}/cells`, {
+    method: 'POST',
+    body: JSON.stringify({
+      cell_id,
+      content,
+      metadata
+    })
+  });
+}
+
+export async function toggleCellSync(code: string, cell_id: string, sync_allowed: boolean): Promise<any> {
+  return requestAPI<any>(`sessions/${code}/cells/${cell_id}/sync`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      sync_allowed
+    })
+  });
+}
+
+export async function getPendingStatus(code: string, cell_id: string): Promise<any> {
+  return requestAPI<any>(`sessions/${code}/cells/${cell_id}/pending`, {
+    method: 'GET'
+  });
+}
+
+export async function requestCellSync(code: string, cell_id: string): Promise<any> {
+  return requestAPI<any>(`sessions/${code}/cells/${cell_id}/sync-request`, {
+    method: 'POST'
+  });
+}
+
+export async function listNotifications(code: string, since: number): Promise<any> {
+  const qp = new URLSearchParams();
+  qp.set('since', String(since));
+  return requestAPI<any>(`sessions/${code}/notifications?${qp.toString()}`, {
+    method: 'GET'
+  });
+}

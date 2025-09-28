@@ -9,7 +9,7 @@ import { Cell } from '@jupyterlab/cells';
 import { Widget } from '@lumino/widgets';
 
 import { requestAPI, listHashKeys, getCellByHash, pushCellByHash } from './handler';
-import { authService, UserRole } from './auth';
+import { AuthService, UserRole } from './auth';
 
 /**
  * User role storage (now managed by authService)
@@ -20,6 +20,45 @@ let currentUserRole: UserRole | null = null;
  * Teacher sync toggle state
  */
 let syncEnabled = false;
+
+/**
+ * Session-related state
+ */
+let sessionCode: string | null = null;
+let teacherIp: string | null = null;
+let sessionReady = false;
+
+/**
+ * Load session state from localStorage
+ */
+function loadSessionState(): void {
+  sessionCode = localStorage.getItem('nb_sync_session_code');
+  teacherIp = localStorage.getItem('nb_sync_teacher_ip');
+  sessionReady = !!sessionCode;
+}
+
+/**
+ * Save session state to localStorage
+ */
+function saveSessionState(): void {
+  if (sessionCode) {
+    localStorage.setItem('nb_sync_session_code', sessionCode);
+  }
+  if (teacherIp) {
+    localStorage.setItem('nb_sync_teacher_ip', teacherIp);
+  }
+}
+
+/**
+ * Clear session state from localStorage
+ */
+function clearSessionState(): void {
+  localStorage.removeItem('nb_sync_session_code');
+  localStorage.removeItem('nb_sync_teacher_ip');
+  sessionCode = null;
+  teacherIp = null;
+  sessionReady = false;
+}
 
 /**
  * Generate ISO timestamp for cell creation
@@ -48,6 +87,18 @@ function addTimestampToCell(cell: Cell): void {
     }
   } catch (error) {
     console.error('Error adding timestamp to cell:', error);
+  }
+}
+
+/**
+ * Ensure cell identity metadata exists
+ */
+function ensureCellIdentity(cell: Cell): void {
+  if (cell.model && cell.model.metadata) {
+    const metadata = cell.model.metadata as any;
+    if (!metadata['nb_sync_cell_id']) {
+      metadata['nb_sync_cell_id'] = `cell_${Math.random().toString(36).slice(2, 10)}`;
+    }
   }
 }
 
@@ -149,7 +200,7 @@ function initializeTeacherFeatures(): void {
 async function checkAuthenticatedRole(): Promise<boolean> {
   try {
     console.log('Checking authentication with backend...');
-    const authResult = await authService.validateSession();
+    const authResult = await AuthService.validateSession();
 
     if (authResult.authenticated && authResult.role) {
       console.log('Valid authenticated role found:', authResult.role);
@@ -175,6 +226,17 @@ async function initializeAuthentication(): Promise<void> {
     if (isAuthenticated) {
       // Authentication successful, UI should already be initialized by setUserRole
       console.log('Authentication successful, UI initialized');
+
+      // Initialize session state
+      loadSessionState();
+
+      if (!sessionReady) {
+        if (currentUserRole === 'teacher') {
+          showTeacherSessionSetupModal();
+        } else if (currentUserRole === 'student') {
+          showStudentSessionSetupModal();
+        }
+      }
     } else {
       // Authentication failed, show error dialog
       const errorMessage = 'Could not authenticate with Jupyter session. Please check your session and role configuration.';
@@ -449,12 +511,11 @@ function createSyncButton(cell: Cell): Widget {
       return;
     }
 
-    // TODO: Replace with actual fetch request to backend
-    // const cellIds = await fetchCellIdsFromBackend();
-
-    // Create and show dropdown with mock data
-    const dropdown = createCellIdDropdown(button.node, cell);
-    document.body.appendChild(dropdown);
+    // If session is ready, add session-specific options
+    if (sessionReady && sessionCode) {
+      const dropdown = createCellIdDropdown(button.node, cell);
+      document.body.appendChild(dropdown);
+    }
   });
 
   return button;
@@ -529,6 +590,12 @@ function createToggleButton(): Widget {
       console.log('Published cell via hash:', res.hash_key);
       // Optional UI feedback
       alert(`Published (hash): ${res.hash_key}`);
+
+      // Push to session if enabled
+      if (sessionReady && currentUserRole === 'teacher' && syncEnabled) {
+        console.log('Pushing cell to session:', sessionCode);
+        // Add session push logic here
+      }
     } catch (err) {
       console.error('Publish (hash) failed:', err);
       alert('Failed to publish cell via hash. See console.');
@@ -557,6 +624,9 @@ function addSyncButtonToCell(cell: Cell): void {
     return;
   }
 
+  // Ensure cell identity metadata exists
+  ensureCellIdentity(cell);
+
   // Check if button already exists
   const existingButton = cell.node.querySelector('.nb-sync-button') || cell.node.querySelector('.nb-sync-toggle-button');
   if (existingButton) {
@@ -583,6 +653,43 @@ function addSyncButtonToCell(cell: Cell): void {
 }
 
 /**
+ * Show teacher session setup modal
+ */
+function showTeacherSessionSetupModal(): void {
+  let code = window.prompt('Enter a session code (leave blank to auto-generate):', '') || '';
+  if (!code.trim()) {
+    code = 'S' + Math.random().toString(36).slice(2, 8).toUpperCase();
+    alert(`Generated session code: ${code}`);
+  }
+  const ip = window.prompt('Optional: Enter teacher Redis IP (blank = default):', '') || '';
+  sessionCode = code.trim();
+  teacherIp = ip.trim() || null;
+  sessionReady = true;
+  saveSessionState();
+  console.log('Teacher session initialized:', { sessionCode, teacherIp });
+  addSyncButtonsToAllCells(); // now that session is ready
+}
+
+/**
+ * Show student session setup modal
+ */
+function showStudentSessionSetupModal(): void {
+  const code = window.prompt('Enter the teacher session code:', '') || '';
+  if (!code.trim()) {
+    alert('No session code entered. Session will remain inactive.');
+    clearSessionState();
+    return;
+  }
+  const ip = window.prompt('Enter teacher Redis IP (blank = default):', '') || '';
+  sessionCode = code.trim();
+  teacherIp = ip.trim() || null;
+  sessionReady = true;
+  saveSessionState();
+  console.log('Student joined session:', { sessionCode, teacherIp });
+  addSyncButtonsToAllCells();
+}
+
+/**
  * Initialization data for the nb_sync extension.
  */
 const plugin: JupyterFrontEndPlugin<void> = {
@@ -600,6 +707,11 @@ const plugin: JupyterFrontEndPlugin<void> = {
 
     // Update the addSyncButtonsToAllCells function first
     addSyncButtonsToAllCells = () => {
+      if (!sessionReady) {
+        console.log('Session not ready, skipping sync button injection.');
+        return;
+      }
+
       console.log('Adding sync buttons to all cells, current role:', currentUserRole);
       notebookTracker.forEach(notebookPanel => {
         const notebook = notebookPanel.content;

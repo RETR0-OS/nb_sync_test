@@ -82,6 +82,10 @@ def validate_jupyter_session(handler: APIHandler) -> Dict[str, Any]:
         # Extract user ID using various methods
         user_id = extract_user_id_from_jupyter_session(handler)
 
+        # Optional: add debug flag via env to log user extraction path
+        if os.getenv('DEBUG_USER_EXTRACTION', '').lower() in ('true', '1', 'yes'):
+            logger.debug(f"User ID extracted: {user_id}")
+
         if not user_id:
             return {
                 'session_valid': False,
